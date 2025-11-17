@@ -1,3 +1,7 @@
+import os
+import fcntl
+import time
+from contextlib import contextmanager
 import argparse
 import json
 import numpy as np
@@ -9,62 +13,108 @@ from pyace.activelearning import compute_B_projections
 from quests.gpu.entropy import entropy
 
 
-def print_cuda_memory():
+def parse_cuda_device_index(device: str) -> int:
+    """
+    Parse something like 'cuda:0' -> 0.
+    """
+    if device.startswith("cuda:"):
+        return int(device.split(":")[1])
+    raise ValueError(f"Unsupported device format: {device}")
+
+
+def wait_for_gpu_memory(device: str, min_free_gb: float = 45.0, poll_s: float = 60.0):
+    """
+    Busy-wait until the given GPU has at least `min_free_gb` available.
+    Uses torch.cuda.mem_get_info().
+    """
     if not torch.cuda.is_available():
-        print("CUDA not available.")
         return
 
-    # Current GPU
-    dev = torch.cuda.current_device()
-    allocated = torch.cuda.memory_allocated(dev) / (1024**3)
-    reserved  = torch.cuda.memory_reserved(dev)  / (1024**3)
-    peak      = torch.cuda.max_memory_allocated(dev) / (1024**3)
+    dev_idx = parse_cuda_device_index(device)
+    torch.cuda.set_device(dev_idx)
 
-    print(f"\n=== CUDA Memory ===")
-    print(f"Allocated: {allocated:.2f} GiB")
-    print(f"Reserved : {reserved:.2f} GiB")
-    print(f"Peak     : {peak:.2f} GiB\n")
+    while True:
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        free_gb = free_bytes / (1024.0 ** 3)
+        total_gb = total_bytes / (1024.0 ** 3)
+
+        if free_gb >= min_free_gb:
+            print(f"[{device}] Enough free memory: {free_gb:.2f} / {total_gb:.2f} GiB")
+            return
+
+        print(
+            f"[{device}] Waiting for GPU memory: "
+            f"{free_gb:.2f} / {total_gb:.2f} GiB free, need {min_free_gb:.2f} GiB"
+        )
+        time.sleep(poll_s)
+
+
+@contextmanager
+def exclusive_gpu(device: str, min_free_gb: float = 45.0, poll_s: float = 60.0):
+    """
+    File-based lock so that only one process uses a given GPU at a time.
+    Also waits for sufficient free memory before proceeding.
+    """
+    if device.startswith("cuda:"):
+        dev_idx = int(device.split(":")[1])
+    else:
+        raise ValueError(f"Unsupported device format: {device}")
+    lock_path = f"/tmp/entropy_gpu_{dev_idx}.lock"
+
+    # /tmp exists, but this is harmless
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                print(f"[{device}] Acquired GPU lock.")
+                break
+            except BlockingIOError:
+                print(f"[{device}] GPU lock busy, sleeping...")
+                time.sleep(poll_s)
+
+        # At this point we logically "own" the GPU.
+        wait_for_gpu_memory(device, min_free_gb=min_free_gb, poll_s=poll_s)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+        print(f"[{device}] Released GPU lock.")
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--elements",          required=True, help='JSON list, e.g. ["C"]')
+    parser.add_argument("--elements",          required=True, nargs="+", help="Element symbols, e.g. C or C Au")
     parser.add_argument("--deltaSplineBins",   required=True, type=str)
     parser.add_argument("--npot",              required=True, type=str)
-    parser.add_argument("--fs_parameters",     required=True, help="JSON list, e.g. [3.0, 0.8]")
+    parser.add_argument("--fs_parameters",     required=True, nargs="+", type=float, help="JSON list, e.g. [3.0, 0.8]")
     parser.add_argument("--ndensity",          required=True, type=float)
     parser.add_argument("--radbase",           required=True, type=str)
-    parser.add_argument("--radparameters",     required=True, help="JSON list, e.g. [5.5]")
+    parser.add_argument("--radparameters",     required=True, nargs="+", type=float, help="JSON list, e.g. [5.5]")
     parser.add_argument("--rcut",              required=True, type=float)
     parser.add_argument("--dcut",              required=True, type=float)
-    parser.add_argument("--nrad",              required=True, help="JSON list, e.g. [8,4,2]")
-    parser.add_argument("--lmax",              required=True, help="JSON list, e.g. [8,6,2]")
+    parser.add_argument("--nrad",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,4,2]")
+    parser.add_argument("--lmax",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,6,2]")
     parser.add_argument("--out",               required=True, help="Output JSONL path")
     parser.add_argument("--device",            required=True, help="Device name")
     parser.add_argument("--data_path",         required=True, help="f-string path to datasets")
     parser.add_argument("--train_set",         required=True, help="Training set for bandwidth tuning")
-    parser.add_argument("--test_sets",         required=True, help="List of test sets")
-    parser.add_argument("--labels",            required=True, help="Dictionary of dataset entropy labels")
+    parser.add_argument("--test_sets",         required=True, nargs="+", help="List of test sets")
+    parser.add_argument("--labels_path",       required=True, help="Path to JSON file with dataset entropy labels")
 
     return parser.parse_args()
 
 
 def make_basis_config(args):
-    elements = json.loads(args.elements)
-    fs_parameters = json.loads(args.fs_parameters)
-    radparameters = json.loads(args.radparameters)
-    nrad = json.loads(args.nrad)
-    lmax = json.loads(args.lmax)
-
     basis_config = {
         "deltaSplineBins": float(args.deltaSplineBins),
-        "elements": elements,
+        "elements": args.elements,
 
         "embeddings": {
             "ALL": {
                 "npot": args.npot,
-                "fs_parameters": fs_parameters,
+                "fs_parameters": args.fs_parameters,
                 "ndensity": int(args.ndensity),
             },
         },
@@ -72,7 +122,7 @@ def make_basis_config(args):
         "bonds": {
             "ALL": {
                 "radbase": args.radbase,
-                "radparameters": radparameters,
+                "radparameters": args.radparameters,
                 "rcut": args.rcut,
                 "dcut": args.dcut,
             }
@@ -80,8 +130,8 @@ def make_basis_config(args):
 
         "functions": {
             "ALL": {
-                "nradmax_by_orders": nrad,
-                "lmax_by_orders": lmax,
+                "nradmax_by_orders": args.nrad,
+                "lmax_by_orders": args.lmax,
             }
         }
     }
@@ -211,37 +261,46 @@ def optimize_bandwidth_entropy(X, S_star, batch_size=10000, grid_width=100.0, gr
 
 def main():
     args = parse_args()
+    print(args)
     basis_config = make_basis_config(args)
 
     out = args.out
     device = args.device
     data_path = args.data_path
     train_set = args.train_set
-    test_sets = json.loads(args.test_sets)
-    labels = json.loads(args.labels)
-    print(f"nrad {json.loads(args.nrad)} lmax {json.loads(args.lmax)}")
+    test_sets = args.test_sets
+    print(test_sets)
+    with open(args.labels_path, "r") as f:
+        labels = json.load(f)
+    print(f"nrad {args.nrad} lmax {args.lmax}")
 
     basis = create_multispecies_basis_config(basis_config)
 
     train_frames_list = read(data_path.format(data_name=train_set), index=":")
     X_train = compute_B_projections(basis, train_frames_list)[0].astype(np.float32)
-    X_train = torch.tensor(X_train, device=device)
 
-    h_opt, opt_report = optimize_bandwidth_entropy(
-        X_train, S_star=labels[train_set], batch_size=10000, grid_width=100.0, grid_pts=25, device=device
-    )
+    with exclusive_gpu(device, min_free_gb=45.0, poll_s=10.0):
+        X_train = torch.tensor(X_train, device=device)
 
-    print("\n=== Bandwidth optimization (Graphite) ===")
-    print(f"pilot h0         : {opt_report['h0']:.6g}")
-    print(f"search log10 span: [{opt_report['log10_bounds'][0]:.3f}, {opt_report['log10_bounds'][1]:.3f}]")
-    print(f"best h           : {opt_report['best_h']:.6g}")
-    print(f"S(best h)        : {opt_report['best_entropy']:.9f}")
-    print(f"target S*        : {opt_report['target_entropy']:.9f}")
-    print(f"|S - S*|         : {opt_report['abs_error']:.6g}")
+        h_opt, opt_report = optimize_bandwidth_entropy(
+            X_train,
+            S_star=labels[train_set],
+            batch_size=10000,
+            grid_width=100.0,
+            grid_pts=25,
+            device=device,
+        )
 
-    # Free GPU memory from training
-    del X_train, train_frames_list
-    if device != "cpu" and "cuda" in device:
+        print("\n=== Bandwidth optimization (Graphite) ===")
+        print(f"pilot h0         : {opt_report['h0']:.6g}")
+        print(f"search log10 span: [{opt_report['log10_bounds'][0]:.3f}, {opt_report['log10_bounds'][1]:.3f}]")
+        print(f"best h           : {opt_report['best_h']:.6g}")
+        print(f"S(best h)        : {opt_report['best_entropy']:.9f}")
+        print(f"target S*        : {opt_report['target_entropy']:.9f}")
+        print(f"|S - S*|         : {opt_report['abs_error']:.6g}")
+
+        # Free GPU memory from training
+        del X_train, train_frames_list
         torch.cuda.empty_cache()
 
     entry = {
@@ -255,20 +314,26 @@ def main():
         test_frames_list = read(data_path.format(data_name=test_set), index=":")
         print("projections")
         X_test = compute_B_projections(basis, test_frames_list)[0].astype(np.float32)
-        X_test = torch.tensor(X_test, device=device)
-        print("entropy")
-        S = entropy(X_test, h=h_opt, batch_size=10000, device=device)
-        print(S)
-        entry["entropies"][test_set] = S.item()
 
-        # Free GPU memory from test
-        del X_test, test_frames_list
-        if device != "cpu" and "cuda" in device:
+        with exclusive_gpu(device, min_free_gb=45.0, poll_s=10.0):
+            X_test = torch.tensor(X_test, device=device)
+            print("entropy")
+            S = entropy(X_test, h=h_opt, batch_size=10000, device=device)
+            print(S)
+            entry["entropies"][test_set] = S.item()
+
+            # Free GPU memory from test
+            del X_test, test_frames_list
             torch.cuda.empty_cache()
 
     with open(out, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
         f.write(json.dumps(entry) + "\n")
         f.flush()
+        os.fsync(f.fileno())
+        fcntl.flock(f, fcntl.LOCK_UN)
+    
+    print("Run completed.")
 
 if __name__ == "__main__":
     main()
