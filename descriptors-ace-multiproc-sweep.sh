@@ -15,31 +15,31 @@ FS_PARAMETERS_LIST=(
   "1.0 0.5"
 )
 
-# RCUT_LIST=(5.5 6.5 7.5)
-RCUT_LIST=(5.5)
-# DCUT_LIST=(0.01 0.2)
-DCUT_LIST=(0.01)
+RCUT_LIST=(5.5 6.5 7.5)
+# RCUT_LIST=(5.5)
+DCUT_LIST=(0.01 0.2)
+# DCUT_LIST=(0.01)
 # dummy value, radparameters is rcut
 RADPARAM_LIST=(5.5)
 
 NRADS=(
-  "15 12 10 8"
-  "12 10 8 6"
+  # "15 12 10 8"
+  # "12 10 8 6"
   "10 8 6 4"
   "8 6 6"
   "8 4 2"
   "4"
 )
 LMAXS=(
-  "0 6 6 5"
-  "0 5 5 4"
+  # "0 6 6 5"
+  # "0 5 5 4"
   "0 4 4 3"
   "0 3 3"
   "8 6 2"
   "4"
 )
 
-DEVICE="cuda:2"
+DEVICE=(cuda:1 cuda:2 cuda:3)
 DATA_PATH="/home/grethel/dev/quests/examples/gap20/{data_name}.xyz"
 
 TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes)
@@ -74,7 +74,7 @@ for i in "${!NDENSITY_LIST[@]}"; do
             --dcut "$dcut" \
             --nrad $nrad \
             --lmax $lmax \
-            --device "$DEVICE" \
+            --device "${DEVICE[@]}" \
             --data_path "$DATA_PATH" \
             --train_set "$TRAIN_SET" \
             --test_sets "${TEST_SETS[@]}" \

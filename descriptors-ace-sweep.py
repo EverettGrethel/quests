@@ -4,6 +4,7 @@ import time
 from contextlib import contextmanager
 import argparse
 import json
+import subprocess
 import numpy as np
 import torch
 
@@ -14,72 +15,124 @@ from quests.gpu.entropy import entropy
 
 
 def parse_cuda_device_index(device: str) -> int:
-    """
-    Parse something like 'cuda:0' -> 0.
-    """
     if device.startswith("cuda:"):
         return int(device.split(":")[1])
     raise ValueError(f"Unsupported device format: {device}")
 
 
+def query_free_mem_gb_nvidia_smi(dev_idx: int) -> float:
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "-i",
+                str(dev_idx),
+                "--query-gpu=memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            encoding="utf-8",
+        )
+        free_mb = float(out.strip().splitlines()[0])
+        return free_mb / 1024.0
+    except Exception as e:
+        print(f"[cuda:{dev_idx}] Failed to query free mem via nvidia-smi: {e}")
+        # Be conservative if we can't query
+        return 0.0
+
+
+def query_total_mem_gb_nvidia_smi(dev_idx: int) -> float:
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "-i",
+                str(dev_idx),
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            encoding="utf-8",
+        )
+        total_mb = float(out.strip().splitlines()[0])
+        return total_mb / 1024.0
+    except Exception as e:
+        print(f"[cuda:{dev_idx}] Failed to query total mem via nvidia-smi: {e}")
+        return 0.0
+
+
 def wait_for_gpu_memory(device: str, min_free_gb: float = 45.0, poll_s: float = 60.0):
-    """
-    Busy-wait until the given GPU has at least `min_free_gb` available.
-    Uses torch.cuda.mem_get_info().
-    """
-    if not torch.cuda.is_available():
+    dev_idx = parse_cuda_device_index(device)
+
+    total_gb = query_total_mem_gb_nvidia_smi(dev_idx)
+    if total_gb <= 0.0:
+        print(f"[{device}] Could not determine total memory; skipping wait_for_gpu_memory.")
         return
 
-    dev_idx = parse_cuda_device_index(device)
-    torch.cuda.set_device(dev_idx)
+    # Avoid asking for more than ~80% of the card; prevents impossible targets
+    effective_min_free = min(min_free_gb, 0.8 * total_gb)
 
     while True:
-        free_bytes, total_bytes = torch.cuda.mem_get_info()
-        free_gb = free_bytes / (1024.0 ** 3)
-        total_gb = total_bytes / (1024.0 ** 3)
+        free_gb = query_free_mem_gb_nvidia_smi(dev_idx)
 
-        if free_gb >= min_free_gb:
-            print(f"[{device}] Enough free memory: {free_gb:.2f} / {total_gb:.2f} GiB")
+        if free_gb >= effective_min_free:
+            print(
+                f"[{device}] Enough free memory: {free_gb:.2f} / {total_gb:.2f} GiB "
+                f"(target ≥ {effective_min_free:.2f} GiB)"
+            )
             return
 
         print(
             f"[{device}] Waiting for GPU memory: "
-            f"{free_gb:.2f} / {total_gb:.2f} GiB free, need {min_free_gb:.2f} GiB"
+            f"{free_gb:.2f} / {total_gb:.2f} GiB free, "
+            f"need ≥ {effective_min_free:.2f} GiB (requested {min_free_gb:.2f} GiB)"
         )
         time.sleep(poll_s)
 
 
+# TODO: Currently locks a GPU to one process regardless of whether there is enough memory for multiple processes.
 @contextmanager
-def exclusive_gpu(device: str, min_free_gb: float = 45.0, poll_s: float = 60.0):
-    """
-    File-based lock so that only one process uses a given GPU at a time.
-    Also waits for sufficient free memory before proceeding.
-    """
-    if device.startswith("cuda:"):
-        dev_idx = int(device.split(":")[1])
+def exclusive_gpu(devices, min_free_gb: float = 45.0, poll_s: float = 60.0):
+    if isinstance(devices, str):
+        device_list = [devices]
     else:
-        raise ValueError(f"Unsupported device format: {device}")
-    lock_path = f"/tmp/entropy_gpu_{dev_idx}.lock"
+        device_list = list(devices)
 
-    # /tmp exists, but this is harmless
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fd = None
+    selected_device = None
+
     try:
         while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                print(f"[{device}] Acquired GPU lock.")
-                break
-            except BlockingIOError:
-                print(f"[{device}] GPU lock busy, sleeping...")
-                time.sleep(poll_s)
+            for dev in device_list:
+                if not dev.startswith("cuda:"):
+                    raise ValueError(f"Unsupported device format: {dev}")
+                dev_idx = parse_cuda_device_index(dev)
+                lock_path = f"/tmp/entropy_gpu_{dev_idx}.lock"
 
-        # At this point we logically "own" the GPU.
-        wait_for_gpu_memory(device, min_free_gb=min_free_gb, poll_s=poll_s)
-        yield
+                fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    print(f"[{dev}] Acquired GPU lock.")
+                except BlockingIOError:
+                    os.close(fd)
+                    fd = None
+                    continue
+
+                selected_device = dev
+                break
+
+            if selected_device is None:
+                print("[GPU] All candidate GPU locks busy, sleeping...")
+                time.sleep(poll_s)
+                continue
+
+            wait_for_gpu_memory(selected_device, min_free_gb=min_free_gb, poll_s=poll_s)
+            yield selected_device
+            return
+
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-        print(f"[{device}] Released GPU lock.")
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+            print(f"[{selected_device}] Released GPU lock.")
 
 
 def parse_args():
@@ -97,7 +150,7 @@ def parse_args():
     parser.add_argument("--nrad",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,4,2]")
     parser.add_argument("--lmax",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,6,2]")
     parser.add_argument("--out",               required=True, help="Output JSONL path")
-    parser.add_argument("--device",            required=True, help="Device name")
+    parser.add_argument("--device",            required=True, nargs="+", help="One or more CUDA devices, e.g. cuda:0 cuda:1 cuda:2 cuda:3")
     parser.add_argument("--data_path",         required=True, help="f-string path to datasets")
     parser.add_argument("--train_set",         required=True, help="Training set for bandwidth tuning")
     parser.add_argument("--test_sets",         required=True, nargs="+", help="List of test sets")
@@ -279,8 +332,8 @@ def main():
     train_frames_list = read(data_path.format(data_name=train_set), index=":")
     X_train = compute_B_projections(basis, train_frames_list)[0].astype(np.float32)
 
-    with exclusive_gpu(device, min_free_gb=45.0, poll_s=10.0):
-        X_train = torch.tensor(X_train, device=device)
+    with exclusive_gpu(device, min_free_gb=20.0, poll_s=30.0) as gpu:
+        X_train = torch.tensor(X_train, device=gpu)
 
         h_opt, opt_report = optimize_bandwidth_entropy(
             X_train,
@@ -288,7 +341,7 @@ def main():
             batch_size=10000,
             grid_width=100.0,
             grid_pts=25,
-            device=device,
+            device=gpu,
         )
 
         print("\n=== Bandwidth optimization (Graphite) ===")
@@ -315,10 +368,10 @@ def main():
         print("projections")
         X_test = compute_B_projections(basis, test_frames_list)[0].astype(np.float32)
 
-        with exclusive_gpu(device, min_free_gb=45.0, poll_s=10.0):
-            X_test = torch.tensor(X_test, device=device)
+        with exclusive_gpu(device, min_free_gb=20.0, poll_s=30.0) as gpu:
+            X_test = torch.tensor(X_test, device=gpu)
             print("entropy")
-            S = entropy(X_test, h=h_opt, batch_size=10000, device=device)
+            S = entropy(X_test, h=h_opt, batch_size=10000, device=gpu)
             print(S)
             entry["entropies"][test_set] = S.item()
 
