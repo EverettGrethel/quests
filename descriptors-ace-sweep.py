@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import argparse
 import json
 import subprocess
+from joblib import Parallel, delayed
 import numpy as np
 import torch
 
@@ -12,6 +13,32 @@ from ase.io import read
 from pyace import create_multispecies_basis_config
 from pyace.activelearning import compute_B_projections
 from quests.gpu.entropy import entropy
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--elements",          required=True, nargs="+", help="Element symbols, e.g. C or C Au")
+    parser.add_argument("--deltaSplineBins",   required=True, type=str)
+    parser.add_argument("--npot",              required=True, type=str)
+    parser.add_argument("--fs_parameters",     required=True, nargs="+", type=float, help="JSON list, e.g. [3.0, 0.8]")
+    parser.add_argument("--ndensity",          required=True, type=float)
+    parser.add_argument("--radbase",           required=True, type=str)
+    parser.add_argument("--radparameters",     required=True, nargs="+", type=float, help="JSON list, e.g. [5.5]")
+    parser.add_argument("--rcut",              required=True, type=float)
+    parser.add_argument("--dcut",              required=True, type=float)
+    parser.add_argument("--nrad",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,4,2]")
+    parser.add_argument("--lmax",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,6,2]")
+    parser.add_argument("--batch_size",        required=True, type=int, help="basis construction batch size for multi-processing")
+    parser.add_argument("--out",               required=True, help="Output JSONL path")
+    parser.add_argument("--device",            required=True, nargs="+", help="One or more CUDA devices, e.g. cuda:0 cuda:1 cuda:2 cuda:3")
+    parser.add_argument("--min_free_gb",       required=True, type=float, help="Minimum GiB of GPU memory needed to allocate device")
+    parser.add_argument("--data_path",         required=True, help="f-string path to datasets")
+    parser.add_argument("--train_set",         required=True, help="Training set for bandwidth tuning")
+    parser.add_argument("--test_sets",         required=True, nargs="+", help="List of test sets")
+    parser.add_argument("--labels_path",       required=True, help="Path to JSON file with dataset entropy labels")
+
+    return parser.parse_args()
 
 
 def parse_cuda_device_index(device: str) -> int:
@@ -135,30 +162,6 @@ def exclusive_gpu(devices, min_free_gb: float = 45.0, poll_s: float = 60.0):
             print(f"[{selected_device}] Released GPU lock.")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--elements",          required=True, nargs="+", help="Element symbols, e.g. C or C Au")
-    parser.add_argument("--deltaSplineBins",   required=True, type=str)
-    parser.add_argument("--npot",              required=True, type=str)
-    parser.add_argument("--fs_parameters",     required=True, nargs="+", type=float, help="JSON list, e.g. [3.0, 0.8]")
-    parser.add_argument("--ndensity",          required=True, type=float)
-    parser.add_argument("--radbase",           required=True, type=str)
-    parser.add_argument("--radparameters",     required=True, nargs="+", type=float, help="JSON list, e.g. [5.5]")
-    parser.add_argument("--rcut",              required=True, type=float)
-    parser.add_argument("--dcut",              required=True, type=float)
-    parser.add_argument("--nrad",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,4,2]")
-    parser.add_argument("--lmax",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,6,2]")
-    parser.add_argument("--out",               required=True, help="Output JSONL path")
-    parser.add_argument("--device",            required=True, nargs="+", help="One or more CUDA devices, e.g. cuda:0 cuda:1 cuda:2 cuda:3")
-    parser.add_argument("--data_path",         required=True, help="f-string path to datasets")
-    parser.add_argument("--train_set",         required=True, help="Training set for bandwidth tuning")
-    parser.add_argument("--test_sets",         required=True, nargs="+", help="List of test sets")
-    parser.add_argument("--labels_path",       required=True, help="Path to JSON file with dataset entropy labels")
-
-    return parser.parse_args()
-
-
 def make_basis_config(args):
     basis_config = {
         "deltaSplineBins": float(args.deltaSplineBins),
@@ -190,6 +193,12 @@ def make_basis_config(args):
     }
     
     return basis_config
+
+
+def compute_projections(basis, frames):
+    desc_dict = compute_B_projections(basis, frames)
+    descriptors = desc_dict[0].astype(np.float32)
+    return descriptors
 
 
 def pilot_bandwidth(X, rng=np.random.default_rng(0), max_pts=2000):
@@ -319,24 +328,37 @@ def main():
 
     out = args.out
     device = args.device
+    min_free_gb = args.min_free_gb
     data_path = args.data_path
     train_set = args.train_set
     test_sets = args.test_sets
+    print(train_set)
     print(test_sets)
+    batch_size = args.batch_size
     with open(args.labels_path, "r") as f:
         labels = json.load(f)
     print(f"nrad {args.nrad} lmax {args.lmax}")
 
     basis = create_multispecies_basis_config(basis_config)
-
     train_frames_list = read(data_path.format(data_name=train_set), index=":")
-    X_train = compute_B_projections(basis, train_frames_list)[0].astype(np.float32)
 
-    with exclusive_gpu(device, min_free_gb=20.0, poll_s=30.0) as gpu:
-        X_train = torch.tensor(X_train, device=gpu)
+    n_batches = int(np.ceil(len(train_frames_list) / batch_size))
+    batches = [
+        train_frames_list[i:i + batch_size]
+        for i in range(0, len(train_frames_list), batch_size)
+    ]
+    # Uses multi-processing
+    X_train = Parallel(n_jobs=n_batches)(
+        delayed(compute_projections)(basis, batch) for batch in batches
+    )
+    X_train = np.concatenate(X_train)
+    print(f"X_train shape {X_train.shape}")
+
+    with exclusive_gpu(device, min_free_gb=min_free_gb, poll_s=30.0) as gpu:
+        X_train_tensor = torch.tensor(X_train, device=gpu)
 
         h_opt, opt_report = optimize_bandwidth_entropy(
-            X_train,
+            X_train_tensor,
             S_star=labels[train_set],
             batch_size=10000,
             grid_width=100.0,
@@ -344,7 +366,7 @@ def main():
             device=gpu,
         )
 
-        print("\n=== Bandwidth optimization (Graphite) ===")
+        print(f"\n=== Bandwidth optimization ({train_set}) ===")
         print(f"pilot h0         : {opt_report['h0']:.6g}")
         print(f"search log10 span: [{opt_report['log10_bounds'][0]:.3f}, {opt_report['log10_bounds'][1]:.3f}]")
         print(f"best h           : {opt_report['best_h']:.6g}")
@@ -353,7 +375,7 @@ def main():
         print(f"|S - S*|         : {opt_report['abs_error']:.6g}")
 
         # Free GPU memory from training
-        del X_train, train_frames_list
+        del X_train_tensor, train_frames_list
         torch.cuda.empty_cache()
 
     entry = {
@@ -362,22 +384,40 @@ def main():
         "entropies": {}
     }
 
+    X_tests_dict = {}
     for test_set in test_sets:
         print(test_set)
-        test_frames_list = read(data_path.format(data_name=test_set), index=":")
-        print("projections")
-        X_test = compute_B_projections(basis, test_frames_list)[0].astype(np.float32)
+        if train_set == test_set:
+            X_test = X_train
+        else:
+            test_frames_list = read(data_path.format(data_name=test_set), index=":")
+        
+            n_batches = int(np.ceil(len(test_frames_list) / batch_size))
+            batches = [
+                test_frames_list[i:i + batch_size]
+                for i in range(0, len(test_frames_list), batch_size)
+            ]
+            # Uses multi-processing
+            X_test = Parallel(n_jobs=n_batches)(
+                delayed(compute_projections)(basis, batch) for batch in batches
+            )
+            X_test = np.concatenate(X_test)
+            del test_frames_list
+        print(f"X_test shape {X_test.shape}")
+        X_tests_dict[test_set] = X_test
+        
 
-        with exclusive_gpu(device, min_free_gb=20.0, poll_s=30.0) as gpu:
-            X_test = torch.tensor(X_test, device=gpu)
+    with exclusive_gpu(device, min_free_gb=min_free_gb, poll_s=30.0) as gpu:
+        for test_set in test_sets:
+            X_test = X_tests_dict[test_set]
+            X_test_tensor = torch.tensor(X_test, device=gpu)
             print("entropy")
-            S = entropy(X_test, h=h_opt, batch_size=10000, device=gpu)
+            S = entropy(X_test_tensor, h=h_opt, batch_size=10000, device=gpu)
             print(S)
             entry["entropies"][test_set] = S.item()
-
-            # Free GPU memory from test
-            del X_test, test_frames_list
-            torch.cuda.empty_cache()
+        # Free test set from GPU memory
+        del X_test_tensor
+        torch.cuda.empty_cache()
 
     with open(out, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)

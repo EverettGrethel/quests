@@ -6,6 +6,9 @@ set -euo pipefail
 # and optionally set concurrency with:
 #   pueue parallel 8
 
+BATCH_SIZE="16"
+MIN_FREE_GB="40.0"
+
 ELEMENTS=(C)
 DELTASPLINEBINS="5e-5"
 NPOT="FinnisSinclairShiftedScaled"
@@ -15,34 +18,34 @@ FS_PARAMETERS_LIST=(
   "1.0 0.5"
 )
 
-RCUT_LIST=(5.5 6.5 7.5)
-# RCUT_LIST=(5.5)
-DCUT_LIST=(0.01 0.2)
-# DCUT_LIST=(0.01)
+# RCUT_LIST=(5.5 6.5 7.5)
+RCUT_LIST=(5.5)
+# DCUT_LIST=(0.01 0.2)
+DCUT_LIST=(0.01)
 # dummy value, radparameters is rcut
 RADPARAM_LIST=(5.5)
 
 NRADS=(
-  # "15 12 10 8"
-  # "12 10 8 6"
-  "10 8 6 4"
-  "8 6 6"
-  "8 4 2"
-  "4"
+  "15 12 10 8"
+  "12 10 8 6"
+  # "10 8 6 4"
+  # "8 6 6"
+  # "8 4 2"
+  # "4"
 )
 LMAXS=(
-  # "0 6 6 5"
-  # "0 5 5 4"
-  "0 4 4 3"
-  "0 3 3"
-  "8 6 2"
-  "4"
+  "0 6 6 5"
+  "0 5 5 4"
+  # "0 4 4 3"
+  # "0 3 3"
+  # "8 6 2"
+  # "4"
 )
 
 DEVICE=(cuda:1 cuda:2 cuda:3)
 DATA_PATH="/home/grethel/dev/quests/examples/gap20/{data_name}.xyz"
 
-TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes)
+TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes Liquid)
 TRAIN_SET="Graphite"
 LABELS_PATH="/home/grethel/dev/quests/gap20_quests_entropy.json"
 OUTDIR="/home/grethel/dev/quests/sweep_results/sweep_graphite_nradlmax_rcut_dcut.jsonl"
@@ -74,7 +77,9 @@ for i in "${!NDENSITY_LIST[@]}"; do
             --dcut "$dcut" \
             --nrad $nrad \
             --lmax $lmax \
+            --batch_size "$BATCH_SIZE" \
             --device "${DEVICE[@]}" \
+            --min_free_gb "$MIN_FREE_GB" \
             --data_path "$DATA_PATH" \
             --train_set "$TRAIN_SET" \
             --test_sets "${TEST_SETS[@]}" \
