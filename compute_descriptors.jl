@@ -13,7 +13,8 @@ s = ArgParseSettings()
 @add_arg_table s begin
     "--elements"
         help = "Comma-separated list of element symbols"
-        default = "C"
+        arg_type = String
+        nargs = '+'
     "--rcut"
         arg_type = Float64
         required = true
@@ -42,7 +43,8 @@ end
 
 args = parse_args(s)
 
-elements = Symbol.(split(args["elements"], ","))
+expanded = Iterators.flatten(split.(args["elements"], ",")) |> collect
+elements = Symbol.(expanded)
 datasets = split(args["datasets"], ",")
 output = args["output"]
 
@@ -97,7 +99,7 @@ for dataset in datasets
     desc_matrix = reshape(all_descs, (n_features, total_atoms))'
     println(size(desc_matrix))
 
-    save_path = "$(output)_$(dataset).npy"
+    save_path = "/home/grethel/dev/quests/npy_files/$(output)_$(dataset).npy"
     println("Saving to $(save_path)")
     npzwrite(save_path, desc_matrix)
 
