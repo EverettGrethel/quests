@@ -1,10 +1,13 @@
 import numpy as np
 import torch
-from quests.gpu.entropy import entropy
+from quests.gpu.entropy import entropy, entropy_cosine
 
 
-def evaluate_entropy_loss(X, S_star, h, batch_size=10000, device="cpu"):
-    S = entropy(X, h=h, batch_size=batch_size, device=device)
+def evaluate_entropy_loss(X, S_star, h, batch_size=10000, cosine=False, device="cpu"):
+    if not cosine:
+        S = entropy(X, h=h, batch_size=batch_size, device=device)
+    else:
+        S = entropy_cosine(X, h=h, batch_size=batch_size, device=device)
     return (S - S_star) ** 2, S
 
 
@@ -41,7 +44,7 @@ def pilot_bandwidth(X, rng=np.random.default_rng(0), max_pts=2000):
     return float(h0)
 
 
-def coarse_log_grid_bracket(X, S_star, h0, width_factor=100.0, num=25, batch_size=10000, device="cpu"):
+def coarse_log_grid_bracket(X, S_star, h0, width_factor=100.0, num=25, batch_size=10000, cosine=False, device="cpu"):
     print("Starting scan...")
     lo = np.log10(h0 / width_factor)
     hi = np.log10(h0 * width_factor)
@@ -49,7 +52,7 @@ def coarse_log_grid_bracket(X, S_star, h0, width_factor=100.0, num=25, batch_siz
     vals = []
     for t in grid:
         h = 10.0 ** t
-        f, Sval = evaluate_entropy_loss(X, S_star, h, batch_size=batch_size, device=device)
+        f, Sval = evaluate_entropy_loss(X, S_star, h, batch_size=batch_size, cosine=cosine, device=device)
         vals.append((t, f, Sval))
     best_i = int(np.argmin([v[1] for v in vals]))
     a_i = max(0, best_i - 1)
@@ -67,7 +70,7 @@ def coarse_log_grid_bracket(X, S_star, h0, width_factor=100.0, num=25, batch_siz
     return (a, fa), (b, fb), (c, fc), vals
 
 
-def golden_section_search_log10(X, S_star, a, b, c, max_iter=60, tol=1e-3, batch_size=10000, device="cpu"):
+def golden_section_search_log10(X, S_star, a, b, c, max_iter=60, tol=1e-3, batch_size=10000, cosine=False, device="cpu"):
     print("Starting search...")
     gr = (np.sqrt(5.0) - 1.0) / 2.0
     left, right = a, c
@@ -76,7 +79,7 @@ def golden_section_search_log10(X, S_star, a, b, c, max_iter=60, tol=1e-3, batch
 
     def f_of_t(t):
         h = 10.0 ** t
-        return evaluate_entropy_loss(X, S_star, h, batch_size=batch_size, device=device)
+        return evaluate_entropy_loss(X, S_star, h, batch_size=batch_size, cosine=cosine, device=device)
 
     f1, S1 = f_of_t(x1)
     f2, S2 = f_of_t(x2)
@@ -100,13 +103,21 @@ def golden_section_search_log10(X, S_star, a, b, c, max_iter=60, tol=1e-3, batch
         return x2, 10.0 ** x2, f2, S2
 
 
-def optimize_bandwidth_entropy(X, S_star, batch_size=10000, grid_width=100.0, grid_pts=25, device="cpu"):
+def optimize_bandwidth_entropy(
+        X,
+        S_star,
+        batch_size=10000,
+        grid_width=100.0,
+        grid_pts=25,
+        cosine=False,
+        device="cpu"
+        ):
     h0 = pilot_bandwidth(X)
     (a, fa), (b, fb), (c, fc), scan = coarse_log_grid_bracket(
-        X, S_star, h0, width_factor=grid_width, num=grid_pts, batch_size=batch_size, device=device,
+        X, S_star, h0, width_factor=grid_width, num=grid_pts, batch_size=batch_size, cosine=cosine, device=device,
     )
     t_best, h_best, f_best, S_best = golden_section_search_log10(
-        X, S_star, a, b, c, max_iter=60, tol=1e-3, batch_size=batch_size, device=device,
+        X, S_star, a, b, c, max_iter=60, tol=1e-3, batch_size=batch_size, cosine=cosine, device=device,
     )
     report = {
         "h0": h0,

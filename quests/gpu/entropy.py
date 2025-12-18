@@ -69,6 +69,18 @@ def entropy(
     return -torch.mean(p_x)
 
 
+def entropy_cosine(
+    x: torch.Tensor,
+    h: float = DEFAULT_BANDWIDTH,
+    batch_size: int = DEFAULT_BATCH,
+    device: str = "cpu",
+):
+    N = x.shape[0]
+    p_x = kernel_sum_cosine(x, x, h=h, batch_size=batch_size, device=device)
+
+    p_x = torch.log(p_x / N)
+    return -torch.mean(p_x)
+
 def delta_entropy(
     x: torch.tensor,
     y: torch.tensor,
@@ -149,19 +161,23 @@ def kernel_sum(
     N = y.shape[0]
     max_step_y = math.ceil(N / batch_size)
 
-    # precomputing the norms saves us some time
-    # norm_x = norm(x)
-    # norm_y = norm(y)
-
     # variables that are going to store the results
     p_x = torch.zeros(M, dtype=x.dtype)
+
+    # pre-computes the y batch norms to avoid redundancy
+    y_norm = torch.empty(N, dtype=y.dtype, device=device)
+
+    for step_y in range(0, max_step_y):
+        j = step_y * batch_size
+        jmax = min(j + batch_size, N)
+        y_batch = y[j:jmax].to(device)
+        y_norm[j:jmax] = norm(y_batch)
 
     # loops over rows and columns
     for step_x in range(0, max_step_x):
         i = step_x * batch_size
         imax = min(i + batch_size, M)
         x_batch = x[i:imax].to(device)
-        # x_batch_norm = norm_x[i:imax].to(device)
         x_batch_norm = norm(x_batch)
 
         # loops over all columns in batches to prevent memory overflow
@@ -169,8 +185,7 @@ def kernel_sum(
             j = step_y * batch_size
             jmax = min(j + batch_size, N)
             y_batch = y[j:jmax].to(device)
-            # y_batch_norm = norm_y[j:jmax].to(device)
-            y_batch_norm = norm(y_batch)
+            y_batch_norm = y_norm[j:jmax]
 
             # computing the estimated probability distribution for the batch
             z = cdist(x_batch, y_batch, x_batch_norm, y_batch_norm)
@@ -178,5 +193,64 @@ def kernel_sum(
             z = sumexp(-0.5 * (z**2))
 
             p_x[i:imax] = p_x[i:imax] + z.to("cpu")
+
+    return p_x
+
+
+def kernel_sum_cosine(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    h: float = DEFAULT_BANDWIDTH,
+    batch_size: int = DEFAULT_BATCH,
+    device: str = "cpu",
+):
+    device = torch.device(device)
+
+    M = x.shape[0]
+    max_step_x = math.ceil(M / batch_size)
+    N = y.shape[0]
+    max_step_y = math.ceil(N / batch_size)
+
+    # variables that are going to store the results
+    p_x = torch.zeros(M, dtype=x.dtype)
+
+    # pre-computes the y batch norms to avoid redundancy
+    y_normalized = torch.empty_like(y, device=device)
+    for step_y in range(max_step_y):
+        j = step_y * batch_size
+        jmax = min(j + batch_size, N)
+        y_batch = y[j:jmax].to(device)
+        y_normalized[j:jmax] = torch.nn.functional.normalize(
+            y_batch,
+            dim=1,
+            eps=1e-8
+        )
+
+    for step_x in range(max_step_x):
+        i = step_x * batch_size
+        imax = min(i + batch_size, M)
+        x_batch = x[i:imax].to(device)
+        x_normalized = torch.nn.functional.normalize(
+            x_batch,
+            dim=1,
+            eps=1e-8
+        )
+
+        # loops over all columns in batches to prevent memory overflow
+        for step_y in range(max_step_y):
+            j = step_y * batch_size
+            jmax = min(j + batch_size, N)
+            y_batch = y_normalized[j:jmax]
+
+            # cosine similarity
+            cos_sim = torch.matmul(x_normalized, y_batch.T)
+
+            # cosine distance
+            cos_dist = 1.0 - cos_sim
+
+            # computing the estimated probability distribution for the batch
+            z = torch.exp(-0.5 * (cos_dist / h) ** 2)
+
+            p_x[i:imax] += z.sum(dim=1).to("cpu")
 
     return p_x
