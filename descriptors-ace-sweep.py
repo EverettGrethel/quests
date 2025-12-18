@@ -12,7 +12,7 @@ import torch
 from ase.io import read
 from pyace import create_multispecies_basis_config
 from pyace.activelearning import compute_B_projections
-from quests.gpu.entropy import entropy
+from quests.gpu.entropy import entropy, entropy_cosine
 
 from gpu_management import exclusive_gpu
 from golden_section import optimize_bandwidth_entropy
@@ -33,6 +33,8 @@ def parse_args():
     parser.add_argument("--nrad",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,4,2]")
     parser.add_argument("--lmax",              required=True, nargs="+", type=int, help="JSON list, e.g. [8,6,2]")
     parser.add_argument("--n_batches",         required=True, type=int)
+    parser.add_argument("--strain",            required=True, type=float, default=0.0)
+    parser.add_argument("--cosine",            required=True, type=int, choices=[0, 1])
     parser.add_argument("--out",               required=True, help="Output JSONL path")
     parser.add_argument("--device",            required=True, nargs="+", help="One or more CUDA devices, e.g. cuda:0 cuda:1 cuda:2 cuda:3")
     parser.add_argument("--min_free_gb",       required=True, type=float, help="Minimum GiB of GPU memory needed to allocate device")
@@ -122,6 +124,7 @@ def main():
             batch_size=10000,
             grid_width=100.0,
             grid_pts=25,
+            cosine=args.cosine,
             device=gpu,
         )
 
@@ -141,16 +144,21 @@ def main():
         "basis_config": basis_config,
         "bandwidth": h_opt,
         "features": X_train.shape[1],
+        "strain": args.strain,
+        "cosine": bool(args.cosine),
         "entropies": {}
     }
 
     X_tests_dict = {}
     for test_set in test_sets:
         print(test_set)
-        if train_set == test_set:
+        if train_set == test_set and not args.strain:
             X_test = X_train
         else:
             test_frames_list = read(data_path.format(data_name=test_set), index=":")
+            if args.strain:
+                for frame in test_frames_list:
+                    frame.set_cell((1.0 - args.strain) * frame.cell, scale_atoms=True)
             indices = np.array_split(np.arange(len(test_frames_list)), n_batches)
             batches = [[test_frames_list[i] for i in idx] for idx in indices]
             # Uses multi-processing
@@ -168,8 +176,10 @@ def main():
         for test_set in test_sets:
             X_test = X_tests_dict[test_set]
             X_test_tensor = torch.tensor(X_test, device=gpu)
-            print("entropy")
-            S = entropy(X_test_tensor, h=h_opt, batch_size=10000, device=gpu)
+            if not args.cosine:
+                S = entropy(X_test_tensor, h=h_opt, batch_size=10000, device=gpu)
+            else:
+                S = entropy_cosine(X_test_tensor, h=h_opt, batch_size=10000, device=gpu)
             print(S)
             entry["entropies"][test_set] = S.item()
         # Free test set from GPU memory
