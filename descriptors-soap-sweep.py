@@ -73,8 +73,8 @@ def main():
             X_train_tensor,
             S_star=labels[train_set],
             batch_size=10000,
-            grid_width=100.0,
-            grid_pts=25,
+            grid_width=1e5,
+            grid_pts=50,
             cosine=args.cosine,
             device=gpu,
         )
