@@ -43,31 +43,42 @@ def pilot_bandwidth(X, rng=np.random.default_rng(0), max_pts=2000):
     print(f"pilot bandwidth {h0}")
     return float(h0)
 
+def coarse_log_grid_bracket(
+    X, S_star, h0,
+    width_factor=100.0,
+    num=50,
+    max_expand=10,
+    batch_size=10000,
+    cosine=False,
+    device="cpu",
+):
+    # Expand until the minimum is not on the boundary
+    for _ in range(max_expand):
+        lo = np.log10(h0 / width_factor)
+        hi = np.log10(h0 * width_factor)
+        grid = np.linspace(lo, hi, num)
 
-def coarse_log_grid_bracket(X, S_star, h0, width_factor=100.0, num=25, batch_size=10000, cosine=False, device="cpu"):
-    print("Starting scan...")
-    lo = np.log10(h0 / width_factor)
-    hi = np.log10(h0 * width_factor)
-    grid = np.linspace(lo, hi, num)
-    vals = []
-    for t in grid:
-        h = 10.0 ** t
-        f, Sval = evaluate_entropy_loss(X, S_star, h, batch_size=batch_size, cosine=cosine, device=device)
-        vals.append((t, f, Sval))
-    best_i = int(np.argmin([v[1] for v in vals]))
-    a_i = max(0, best_i - 1)
-    c_i = min(len(vals) - 1, best_i + 1)
-    if a_i == best_i:
-        a_i = max(0, best_i - 2)
-    if c_i == best_i:
-        c_i = min(len(vals) - 1, best_i + 2)
-    a, fa, _ = vals[a_i]
-    b, fb, _ = vals[best_i]
-    c, fc, _ = vals[c_i]
-    if not (fb <= fa and fb <= fc):
-        a, fa, _ = vals[max(0, best_i - 1)]
-        c, fc, _ = vals[min(len(vals) - 1, best_i + 1)]
-    return (a, fa), (b, fb), (c, fc), vals
+        vals = []
+        for t in grid:
+            h = 10.0 ** t
+            f, Sval = evaluate_entropy_loss(X, S_star, h, batch_size=batch_size, cosine=cosine, device=device)
+            vals.append((t, float(f), float(Sval)))
+
+        best_i = int(np.argmin([v[1] for v in vals]))
+
+        # If best is on an edge, expand and try again
+        if best_i == 0 or best_i == len(vals) - 1:
+            width_factor *= 10.0
+            continue
+
+        # Return a proper bracket around the best interior point
+        a, fa, _ = vals[best_i - 1]
+        b, fb, _ = vals[best_i]
+        c, fc, _ = vals[best_i + 1]
+        return (a, fa), (b, fb), (c, fc), vals, width_factor
+
+    raise RuntimeError("Could not find an interior minimum; expanded scan too many times.")
+
 
 
 def golden_section_search_log10(X, S_star, a, b, c, max_iter=60, tol=1e-3, batch_size=10000, cosine=False, device="cpu"):
@@ -113,7 +124,7 @@ def optimize_bandwidth_entropy(
         device="cpu"
         ):
     h0 = pilot_bandwidth(X)
-    (a, fa), (b, fb), (c, fc), scan = coarse_log_grid_bracket(
+    (a, fa), (b, fb), (c, fc), scan, width_factor = coarse_log_grid_bracket(
         X, S_star, h0, width_factor=grid_width, num=grid_pts, batch_size=batch_size, cosine=cosine, device=device,
     )
     t_best, h_best, f_best, S_best = golden_section_search_log10(
@@ -123,6 +134,7 @@ def optimize_bandwidth_entropy(
         "h0": h0,
         "log10_bounds": (a, c),
         "grid_points": grid_pts,
+        "grid_width": width_factor,
         "best_log10h": t_best,
         "best_h": h_best,
         "best_entropy": S_best,
