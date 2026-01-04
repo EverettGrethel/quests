@@ -11,15 +11,18 @@ MIN_FREE_GB="5.0"
 SPECIES=(C)
 
 PERIODIC=1
+COSINE=0
+DTYPE=64
 
 STRAIN_LIST=(0.0 0.01 0.05 0.1)
+# STRAIN_LIST=(0.0)
 
-# R_CUT_LIST=(5.5 6.5 7.5)
-R_CUT_LIST=(5.5)
+R_CUT_LIST=(5.0 6.0 7.0)
+# R_CUT_LIST=(5.0)
 
 COMBINATIONS=(
-  "5 5"
-  # "8 8"
+  # "5 5"
+  "8 8"
   # "8 10"
   # "10 10"
   # "10 12"
@@ -55,7 +58,9 @@ for strain in "${STRAIN_LIST[@]}"; do
         --n_max $n_max \
         --periodic $PERIODIC \
         --strain "$strain" \
+        --cosine "$COSINE" \
         --device "${DEVICE[@]}" \
+        --dtype "$DTYPE" \
         --min_free_gb "$MIN_FREE_GB" \
         --data_path "$DATA_PATH" \
         --train_set "$TRAIN_SET" \

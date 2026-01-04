@@ -22,11 +22,11 @@ COSINE=0
 STRAIN_LIST=(0.0 0.01 0.05 0.1)
 # STRAIN_LIST=(0.0)
 
-# CUTOFF_LIST=(5.5 6.5 7.5)
-CUTOFF_LIST=(5.5)
+# CUTOFF_LIST=(5.0 6.0 7.0)
+CUTOFF_LIST=(5.0)
 
-K_LIST=(16 32 64)
-# K_LIST=(16)
+# K_LIST=(32 64 128)
+K_LIST=(32)
 
 DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
 # DEVICE=(cuda:2 cuda:3)

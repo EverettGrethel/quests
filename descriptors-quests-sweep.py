@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--cosine", required=True, type=int, choices=[0, 1])
     parser.add_argument("--out", required=True)
     parser.add_argument("--device", required=True, nargs="+")
+    parser.add_argument("--dtype", type=int, choices=[32, 64], default=64)
     parser.add_argument("--min_free_gb", required=True, type=float)
     parser.add_argument("--data_path", required=True)
     parser.add_argument("--train_set", required=True)
@@ -42,6 +43,12 @@ def main():
     data_path = args.data_path
     train_set = args.train_set
     test_sets = args.test_sets
+    if int(args.dtype) == 64:
+        dtype = torch.float64
+    elif int(args.dtype) == 32:
+        dtype = torch.float32
+    else:
+        ValueError(f"{args.dtype} is not a valid dtype.")
 
     with open(args.labels_path, "r") as f:
         labels = json.load(f)
@@ -53,14 +60,14 @@ def main():
 
     # ---- BANDWIDTH OPT ----
     with exclusive_gpu(device, min_free_gb=min_free_gb, poll_s=30.0) as gpu:
-        X_train_tensor = torch.tensor(X_train, device=gpu)
+        X_train_tensor = torch.tensor(X_train, device=gpu, dtype=dtype)
 
         h_opt, opt_report = optimize_bandwidth_entropy(
             X_train_tensor,
             S_star=labels[train_set],
             batch_size=10000,
-            grid_width=100.0,
-            grid_pts=25,
+            grid_width=1e5,
+            grid_pts=50,
             cosine=args.cosine,
             device=gpu
         )

@@ -7,6 +7,7 @@ export NUMEXPR_NUM_THREADS=$num_threads
 export OMP_NUM_THREADS=$num_threads
 export OPENBLAS_NUM_THREADS=$num_threads
 export MKL_NUM_THREADS=$num_threads
+export LOKY_MAX_CPU_COUNT=$num_threads
 
 # Make sure the pueue daemon is running before using this:
 #   pueued -d
@@ -29,12 +30,12 @@ COSINE=1
 
 STRAIN_LIST=(0.0)
 
-# RCUT_LIST=(5.5 6.5 7.5)
-RCUT_LIST=(5.5)
+# RCUT_LIST=(5.0 6.0 7.0)
+RCUT_LIST=(5.0)
 # DCUT_LIST=(0.01 0.2)
 DCUT_LIST=(0.01)
 # dummy value, radparameters is rcut
-RADPARAM_LIST=(5.5)
+RADPARAM_LIST=(5.0)
 
 NRADS=(
   # "15 12 10 8"

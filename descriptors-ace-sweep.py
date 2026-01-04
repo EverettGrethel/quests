@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--cosine",            required=True, type=int, choices=[0, 1])
     parser.add_argument("--out",               required=True, help="Output JSONL path")
     parser.add_argument("--device",            required=True, nargs="+", help="One or more CUDA devices, e.g. cuda:0 cuda:1 cuda:2 cuda:3")
+    parser.add_argument("--dtype",                            type=int, choices=[32, 64], default=64)
     parser.add_argument("--min_free_gb",       required=True, type=float, help="Minimum GiB of GPU memory needed to allocate device")
     parser.add_argument("--data_path",         required=True, help="f-string path to datasets")
     parser.add_argument("--train_set",         required=True, help="Training set for bandwidth tuning")
@@ -79,9 +80,9 @@ def make_basis_config(args):
     return basis_config
 
 
-def compute_projections(basis, frames):
+def compute_projections(basis, frames, data_type):
     desc_dict = compute_B_projections(basis, frames)
-    descriptors = desc_dict[0].astype(np.float32)
+    descriptors = desc_dict[0].astype(data_type)
     return descriptors
 
 
@@ -98,6 +99,14 @@ def main():
     test_sets = args.test_sets
     print(train_set)
     print(test_sets)
+    if int(args.dtype) == 64:
+        dtype = torch.float64
+        np_dtype = np.float64
+    elif int(args.dtype) == 32:
+        dtype = torch.float32
+        np_dtype = np.float32
+    else:
+        ValueError(f"{args.dtype} is not a valid dtype.")
     n_batches = args.n_batches
     with open(args.labels_path, "r") as f:
         labels = json.load(f)
@@ -110,20 +119,20 @@ def main():
     batches = [[train_frames_list[i] for i in idx] for idx in indices]
     # Uses multi-processing
     X_train = Parallel(n_jobs=n_batches)(
-        delayed(compute_projections)(basis, batch) for batch in batches
+        delayed(compute_projections)(basis, batch, np_dtype) for batch in batches
     )
     X_train = np.concatenate(X_train)
     print(f"X_train shape {X_train.shape}")
 
     with exclusive_gpu(device, min_free_gb=min_free_gb, poll_s=30.0) as gpu:
-        X_train_tensor = torch.tensor(X_train, device=gpu)
+        X_train_tensor = torch.tensor(X_train, device=gpu, dtype=dtype)
 
         h_opt, opt_report = optimize_bandwidth_entropy(
             X_train_tensor,
             S_star=labels[train_set],
             batch_size=10000,
-            grid_width=100.0,
-            grid_pts=25,
+            grid_width=1e5,
+            grid_pts=50,
             cosine=args.cosine,
             device=gpu,
         )
@@ -163,7 +172,7 @@ def main():
             batches = [[test_frames_list[i] for i in idx] for idx in indices]
             # Uses multi-processing
             X_test = Parallel(n_jobs=n_batches)(
-                delayed(compute_projections)(basis, batch) for batch in batches
+                delayed(compute_projections)(basis, batch, np_dtype) for batch in batches
             )
             X_test = np.concatenate(X_test)
             del test_frames_list

@@ -7,6 +7,7 @@ export NUMEXPR_NUM_THREADS=$num_threads
 export OMP_NUM_THREADS=$num_threads
 export OPENBLAS_NUM_THREADS=$num_threads
 export MKL_NUM_THREADS=$num_threads
+export LOKY_MAX_CPU_COUNT=$_num_threads
 
 # Make sure the pueue daemon is running before using this:
 #   pueued -d
@@ -25,34 +26,36 @@ FS_PARAMETERS_LIST=(
   "1.0 0.5"
 )
 
+COSINE=0
+
 STRAIN_LIST=(0.0)
 
-# RCUT_LIST=(5.5 6.5 7.5)
-RCUT_LIST=(5.5)
+# RCUT_LIST=(5.0 6.0 7.0)
+RCUT_LIST=(5.0)
 # DCUT_LIST=(0.01 0.2)
 DCUT_LIST=(0.01)
 # dummy value, radparameters is rcut
-RADPARAM_LIST=(5.5)
+RADPARAM_LIST=(5.0)
 
 NRADS=(
   # "15 12 10 8"
-  "12 10 8 6"
-  "10 8 6 4"
-  "8 6 6"
-  "8 4 2"
+  # "12 10 8 6"
+  # "10 8 6 4"
+  # "8 6 6"
+  # "8 4 2"
   "4"
 )
 LMAXS=(
   # "0 6 6 5"
-  "0 5 5 4"
-  "0 4 4 3"
-  "0 3 3"
-  "8 6 2"
+  # "0 5 5 4"
+  # "0 4 4 3"
+  # "0 3 3"
+  # "8 6 2"
   "4"
 )
 
-# DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
-DEVICE=(cuda:2 cuda:3)
+DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
+# DEVICE=(cuda:2 cuda:3)
 DATA_PATH="/home/grethel/dev/quests/examples/gap20/{data_name}.xyz"
 
 TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes Liquid)
@@ -90,6 +93,7 @@ for strain in "${STRAIN_LIST[@]}"; do
               --lmax $lmax \
               --n_batches "$N_BATCHES" \
               --strain "$strain" \
+              --cosine "$COSINE" \
               --device "${DEVICE[@]}" \
               --min_free_gb "$MIN_FREE_GB" \
               --data_path "$DATA_PATH" \
