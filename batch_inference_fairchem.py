@@ -1,43 +1,64 @@
 """
-Batch inference script for multiple frames in a trajectory
-This demonstrates how to get predictions for multiple frames efficiently
-using batching instead of a slow per-frame loop.
+Batch inference script with layer embeddings extraction
+Extracts node embeddings from the last hidden layer before readout heads
 """
+
 from pathlib import Path
+import argparse
+
 from fairchem.core import OCPCalculator
 from fairchem.core.preprocessing.atoms_to_graphs import AtomsToGraphs
 from fairchem.core.datasets import data_list_collater
 from ase.io import read
 import torch
+import numpy as np
 
 
-def predict_trajectory_batch(trajectory_file: str, checkpoint_path: str, batch_size: int = 4):
+def predict_trajectory_batch(
+    trajectory_file: str,
+    checkpoint_path: str,
+    device: str = "cuda",
+    batch_size: int = 1,
+    cutoff: float = None,
+):
     """
     Predict energy, forces, stress for all frames in a trajectory using batching.
-    
-    Args:
-        trajectory_file: Path to trajectory file (any format ASE can read)
-        checkpoint_path: Path to FAIRChem model checkpoint
-        batch_size: Number of frames to process at once (larger = faster, more memory)
-    
+    Extract node embeddings from the last hidden layer.
+
     Returns:
-        Dictionary with 'energy', 'forces', 'stress' arrays per frame
+        Dictionary with 'energy', 'forces', 'stress', 'embeddings'
     """
-    
-    # Read all frames from trajectory
+
     print(f"Reading trajectory: {trajectory_file}")
-    atoms_list = read(trajectory_file, index=":")[0:8]
+    atoms_list = read(trajectory_file, index=":")
+    # from ase.build import bulk
+
+    # atoms = bulk("Cu", "fcc", a=3.61)  # Cu FCC with lattice ~3.61 Å
+    # atoms.set_pbc((True, True, True))
+    # atoms_list = atoms
+
     if not isinstance(atoms_list, list):
         atoms_list = [atoms_list]
-    
+
     n_frames = len(atoms_list)
     print(f"Found {n_frames} frames")
-    
-    # Initialize model
+
+    # Load model
     print("Loading model...")
     calc = OCPCalculator(checkpoint_path=checkpoint_path)
-    
-    # Initialize atoms-to-graph converter
+    model = calc.trainer.model.to(device)
+    calc.trainer.device = device
+
+    for key in calc.trainer.elementrefs:
+        calc.trainer.elementrefs[key] = calc.trainer.elementrefs[key].to(device)
+
+    print(f"Model device: {device}")
+
+    # Override cutoff if provided
+    if cutoff is not None:
+        print(f"Overriding cutoff to {cutoff} Å")
+        calc.trainer.model.cutoff = cutoff
+
     a2g = AtomsToGraphs(
         r_energy=False,
         r_forces=False,
@@ -45,52 +66,117 @@ def predict_trajectory_batch(trajectory_file: str, checkpoint_path: str, batch_s
         r_pbc=True,
         r_edges=not calc.trainer.model.otf_graph,
     )
-    
-    # Storage for results
-    results = {'energy': [], 'forces': [], 'stress': []}
-    
-    # Process frames in batches
+
+    results = {
+        "energy": [],
+        "forces": [],
+        "stress": [],
+        "embeddings": [],
+    }
+
+    # Hook for embeddings
+    norm_output = None
+
+    def hook_fn(module, input, output):
+        nonlocal norm_output
+        norm_output = output
+
+    hook = model.backbone.norm.register_forward_hook(hook_fn)
+
     print(f"Processing {n_frames} frames in batches of {batch_size}...")
     for batch_idx in range(0, n_frames, batch_size):
-        batch_end = min(batch_idx + batch_size, n_frames)
-        batch_frames = atoms_list[batch_idx:batch_end]
-        
-        # Convert to graphs and create batch
+        batch_frames = atoms_list[batch_idx : batch_idx + batch_size]
+
         data_list = [a2g.convert(atoms) for atoms in batch_frames]
-        batch = data_list_collater(data_list, otf_graph=True)
-        
-        # Run inference
+        batch = data_list_collater(data_list, otf_graph=True).to(device)
+
         with torch.no_grad():
-            predictions = calc.trainer.predict(batch, per_image=False, disable_tqdm=True)
-        
-        # Split results by frame using natoms
+            predictions = calc.trainer.predict(
+                batch, per_image=False, disable_tqdm=True,
+            )
+
         natoms_list = batch.natoms.tolist()
-        energies = predictions['energy']
-        forces = torch.split(predictions['forces'], natoms_list)
-        stresses = predictions['stress']
-        
-        # Store results per frame
+
+        energies = predictions["energy"]
+        forces = torch.split(predictions["forces"], natoms_list)
+        stresses = predictions["stress"]
+
         for i, (energy, force) in enumerate(zip(energies, forces)):
-            results['energy'].append(energy.item())
-            results['forces'].append(force.detach().cpu().numpy())
-            results['stress'].append(stresses[i].detach().cpu().numpy())
-        
-        print(f"  Processed frames {batch_idx+1}-{batch_end}")
-    
+            results["energy"].append(energy.item())
+            results["forces"].append(force.cpu().detach().numpy())
+            results["stress"].append(stresses[i].cpu().detach().numpy())
+
+        emb_tensor = norm_output.reshape(norm_output.shape[0], -1)
+        embeddings_split = torch.split(emb_tensor, natoms_list)
+
+        for emb in embeddings_split:
+            results["embeddings"].append(emb.cpu().detach().numpy())
+
+        print(f"  Processed frames {batch_idx + 1}-{batch_idx + len(batch_frames)}")
+
+    hook.remove()
+
     return results
 
 
+def build_output_path(trajectory_file: str, checkpoint_path: str, output_dir: str):
+    """
+    Build output filename: <model>_<dataset>.npz
+    """
+    model_name = Path(checkpoint_path).stem
+    dataset_name = Path(trajectory_file).stem
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return output_dir / f"{model_name}_{dataset_name}.npz"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Batch inference with embedding extraction"
+    )
+    parser.add_argument("trajectory_file", type=str, help="Path to trajectory file")
+    parser.add_argument("checkpoint_path", type=str, help="Path to model checkpoint")
+    parser.add_argument("--device", type=str, default="cuda", help="cuda, cuda:0, or cpu")
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="./embeddings",
+        help="Directory to save output",
+    )
+    parser.add_argument(
+        "--cutoff",
+        type=float,
+        default=None,
+        help="Override cutoff radius in Angstroms (e.g., 20.0)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    # Example usage
-    trajectory_file = "/home/grethel/dev/quests/examples/gap20/Graphene.xyz"
-    checkpoint_path = "/home/grethel/dev/fairchem_checkpoints/eqV2_31M_omat_mp_salex.pt"
-    
-    results = predict_trajectory_batch(trajectory_file, checkpoint_path, batch_size=4)
-    
-    print("\n" + "=" * 50)
-    print("Results Summary")
-    print("=" * 50)
-    print(f"Number of frames: {len(results['energy'])}")
-    print(f"Energies: {results['energy']}")
-    print(f"Number of force arrays: {len(results['forces'])}")
-    print(f"Number of stress arrays: {len(results['stress'])}")
+    args = parse_args()
+
+    results = predict_trajectory_batch(
+        trajectory_file=args.trajectory_file,
+        checkpoint_path=args.checkpoint_path,
+        device=args.device,
+        batch_size=args.batch_size,
+        cutoff=args.cutoff,
+    )
+
+    output_file = build_output_path(
+        args.trajectory_file, args.checkpoint_path, args.output_dir
+    )
+
+    print(f"Saving results to: {output_file}")
+
+    np.savez_compressed(
+        output_file,
+        energy=np.array(results["energy"]),
+        forces=np.array(results["forces"], dtype=object),
+        stress=np.array(results["stress"], dtype=object),
+        embeddings=np.array(results["embeddings"].reshape(results['embeddings'].shape[0], -1), dtype=object),
+    )
+
+    print("Done.")
