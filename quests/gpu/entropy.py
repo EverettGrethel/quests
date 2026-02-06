@@ -246,7 +246,7 @@ def kernel_sum_cosine(
             cos_sim = torch.matmul(x_normalized, y_batch.T)
 
             # cosine distance
-            cos_dist = 1.0 - cos_sim
+            cos_dist = math.sqrt(2.0) * torch.sqrt((1.0 - cos_sim).clamp_min(0.0))
 
             # computing the estimated probability distribution for the batch
             z = torch.exp(-0.5 * (cos_dist / h) ** 2)
