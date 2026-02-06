@@ -14,22 +14,30 @@ MODELS=(
   uma-m-1p1
 )
 
-# DATASETS=(
-#   Graphene
-# )
 DATASETS=(
-  Graphene
-  Diamond
-  Graphite
-  Nanotubes
-  Fullerenes
-  Liquid
+  # Diamond_two_frames
+  # Graphene
+  # Diamond
+  # Graphite
+  # Nanotubes
+  # Fullerenes
+  # Liquid
+  Graphene_reflect_invert
+  Diamond_reflect_invert
+  Graphite_reflect_invert
+  Nanotubes_reflect_invert
+  Fullerenes_reflect_invert
+  Liquid_reflect_invert
 )
 
-DATA_PATH_TEMPLATE="/home/grethel/dev/quests/examples/gap20/{dataset}.xyz"
-OUTDIR="/home/grethel/dev/quests/embeddings"
+# DATA_PATH_TEMPLATE="/home/grethel/dev/quests/examples/gap20/{dataset}.xyz"
+DATA_PATH_TEMPLATE="/home/grethel/dev/quests/examples/gap20_reflect_invert/{dataset}.xyz"
+# OUTDIR="/data/grethel/embeddings/embeddings_raw/npz"
+OUTDIR="/data/grethel/embeddings/reflect_invert/npz"
 
 DEVICE="cuda"
+
+RANDOM_WEIGHTS="1"
 
 #######################################
 # Submit sweep
@@ -52,6 +60,7 @@ for model in "${MODELS[@]}"; do
         "$trajectory_file" \
         --model_name "$model" \
         --device "$DEVICE" \
+        --random_weights "$RANDOM_WEIGHTS" \
         --output_dir "$OUTDIR"
 
   done

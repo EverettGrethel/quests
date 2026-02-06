@@ -23,6 +23,7 @@ def parse_args():
         help="Pretrained UMA model name",
     )
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--random_weights", type=int, choices=[0,1])
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -32,17 +33,35 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_output_path(trajectory_file: str, model_name: str, output_dir: str):
+def build_output_path(
+    trajectory_file: str,
+    checkpoint_path: str,
+    output_dir: str,
+    save_npz: bool,
+    random_weights: bool,
+) -> Path:
+    """
+    Build output filename: <model>_<dataset>.(npz|npy)
+    """
+    model_name = Path(checkpoint_path).stem
     dataset_name = Path(trajectory_file).stem
+
     output_dir = Path(output_dir)
+    if random_weights:
+        output_dir = output_dir / "random"
     output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir / f"{model_name}_{dataset_name}.npz"
+
+    suffix = ".npz" if save_npz else ".npy"
+    path = output_dir / f"{model_name}_{dataset_name}{suffix}"
+
+    return path
 
 
 def run_inference(
     trajectory_file: str,
     model_name: str,
     device: str,
+    random_weights: bool,
 ):
     print(f"Reading trajectory: {trajectory_file}")
     frames = read(trajectory_file, index=":")
@@ -50,12 +69,19 @@ def run_inference(
 
     print(f"Loading UMA model: {model_name}")
     predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
+    if random_weights:
+        print("Using random model weights")
+        for param in predictor.model.parameters():
+            param.data = torch.randn_like(param.data)
+
     calc = FAIRChemCalculator(predictor, task_name="omat")
 
     model = predictor.model
 
     embeddings_list = []
-    energies = []
+    energies_list = []
+    forces_list = []
+    stresses_list = []
 
     norm_output = None
 
@@ -70,12 +96,16 @@ def run_inference(
             frame.calc = calc
 
             energy = frame.get_potential_energy()
-            energies.append(energy)
+            forces = frame.get_forces()
+            stress = frame.get_stress()
+            energies_list.append(energy)
+            forces_list.append(forces)
+            stresses_list.append(stress)
 
             if norm_output is not None:
                 embeddings_list.append(norm_output.detach().cpu())
 
-            print(f"Frame {i + 1}: Energy = {energy:.6f}")
+            # print(f"Frame {i + 1}: Energy = {energy:.6f}")
 
     finally:
         hook_handle.remove()
@@ -85,10 +115,12 @@ def run_inference(
 
     # Concatenate atom embeddings across all frames
     all_embeddings = torch.cat(embeddings_list, dim=0)
-    all_embeddings = all_embeddings.flatten(start_dim=1)
+    # all_embeddings = all_embeddings.flatten(start_dim=1)
 
     return {
-        "energy": np.array(energies),
+        "energy": np.array(energies_list),
+        "forces": np.concatenate(forces_list, axis=0),
+        "stress": np.concatenate(stresses_list, axis=0),
         "embeddings": all_embeddings.numpy(),
     }
 
@@ -100,12 +132,15 @@ if __name__ == "__main__":
         trajectory_file=args.trajectory_file,
         model_name=args.model_name,
         device=args.device,
+        random_weights=args.random_weights,
     )
 
     output_file = build_output_path(
         args.trajectory_file,
         args.model_name,
         args.output_dir,
+        save_npz=True,
+        random_weights=args.random_weights,
     )
 
     print(f"Saving results to: {output_file}")
@@ -113,6 +148,8 @@ if __name__ == "__main__":
     np.savez_compressed(
         output_file,
         energy=results["energy"],
+        forces=results["forces"],
+        stress=results["stress"],
         embeddings=results["embeddings"],
     )
 

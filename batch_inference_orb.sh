@@ -4,22 +4,18 @@ set -euo pipefail
 #######################################
 # CPU / threading configuration
 #######################################
-
 num_threads=4
 
-CHECKPOINTS=(
-  /home/grethel/dev/fairchem_checkpoints/eqV2_dens_31M_mp.pt
-  # /home/grethel/dev/fairchem_checkpoints/eqV2_31M_omat_mp_salex.pt
-  # /home/grethel/dev/fairchem_checkpoints/eqV2_86M_omat_mp_salex.pt
-  # /home/grethel/dev/fairchem_checkpoints/eqV2_dens_86M_mp.pt
-  # /home/grethel/dev/fairchem_checkpoints/eqV2_153M_omat_mp_salex.pt
-  # /home/grethel/dev/fairchem_checkpoints/eqV2_dens_153M_mp.pt
+# See for other models: /home/grethel/env/orb_v3/lib/python3.11/site-packages/orb_models/forcefield/pretrained.py
+MODELS=(
+  orb-v3-conservative-inf-omat
+  # orb-v3-conservative-20-omat
+  # orb-v3-conservative-inf-mpa
+  # orb-v3-conservative-20-mpa
 )
 
 DATASETS=(
-  # Graphene_one_frame
-  # Graphene_one_frame_rotated
-    Diamond_two_frames
+  Diamond_two_frames
   # Graphene
   # Diamond
   # Graphite
@@ -36,53 +32,56 @@ DATASETS=(
 
 DATA_PATH_TEMPLATE="/home/grethel/dev/quests/examples/gap20/{dataset}.xyz"
 # DATA_PATH_TEMPLATE="/home/grethel/dev/quests/examples/gap20_reflect_invert/{dataset}.xyz"
-OUTDIR="/data/grethel/embeddings/embeddings_raw/npz"
-# OUTDIR="/data/grethel/embeddings/reflect_invert/npz"
+# OUTDIR="/home/grethel/dev/quests/embeddings/npz"
+OUTDIR="/data/grethel/embeddings/reflect_invert/npz"
 
-# Batch sizes to sweep
-BATCH_SIZE=1
+# Batch size
+BATCH_SIZE=20
 
-# Devices (round-robin)
-DEVICE="cpu"
+# Device
+DEVICE="cuda:3"
 
-CUTOFF=20
+# Optional precision for ORB (leave empty to omit)
+PRECISION="float64"
 
-save_npz=1
+# Python executable / env
+VENV_PYTHON="/home/grethel/env/orb_v3/bin/python"
 
 #######################################
 # Submit sweep
 #######################################
-
 job_id=0
 
-for checkpoint in "${CHECKPOINTS[@]}"; do
+for model in "${MODELS[@]}"; do
   for dataset in "${DATASETS[@]}"; do
-
     job_id=$((job_id + 1))
-
     trajectory_file="${DATA_PATH_TEMPLATE/\{dataset\}/$dataset}"
 
     echo "Queuing:"
-    echo "  checkpoint=$(basename "$checkpoint")"
     echo "  dataset=$dataset"
     echo "  batch_size=$BATCH_SIZE"
     echo "  device=$DEVICE"
+    echo "  trajectory_file=$trajectory_file"
 
-    VENV_PYTHON="/home/grethel/env/fairchem_1.3.0/bin/python"
+    # Build optional precision args
+    precision_args=()
+    if [[ -n "${PRECISION}" ]]; then
+      precision_args+=( --precision "${PRECISION}" )
+    fi
 
-    pueue add --group eqv2 -- \
+    pueue add --group orb -- \
       NUMEXPR_NUM_THREADS=$num_threads \
       OMP_NUM_THREADS=$num_threads \
       OPENBLAS_NUM_THREADS=$num_threads \
       MKL_NUM_THREADS=$num_threads \
       LOKY_MAX_CPU_COUNT=$num_threads \
-      "$VENV_PYTHON" -u batch_inference_fairchem.py \
+      "$VENV_PYTHON" -u batch_inference_orb.py \
         "$trajectory_file" \
-        "$checkpoint" \
+        --model "$model" \
         --device "$DEVICE" \
         --batch_size "$BATCH_SIZE" \
-        --save_npz "$save_npz" \
-        --output_dir "$OUTDIR"
+        --output_dir "$OUTDIR" \
+        "${precision_args[@]}"
   done
 done
 

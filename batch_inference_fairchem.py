@@ -116,19 +116,34 @@ def predict_trajectory_batch(
 
     hook.remove()
 
+    results["energy"] = np.array(results["energy"])
+    results["forces"] = np.concatenate(results["forces"], axis=0)
+    results["stress"] = np.concatenate(results["stress"], axis=0)
+    results["embeddings"] = np.concatenate(results["embeddings"], axis=0)
+
     return results
 
 
-def build_output_path(trajectory_file: str, checkpoint_path: str, output_dir: str):
+def build_output_path(
+    trajectory_file: str,
+    checkpoint_path: str,
+    output_dir: str,
+    save_npz: bool,
+) -> Path:
     """
-    Build output filename: <model>_<dataset>.npz
+    Build output filename: <model>_<dataset>.(npz|npy)
     """
     model_name = Path(checkpoint_path).stem
     dataset_name = Path(trajectory_file).stem
+
     output_dir = Path(output_dir)
+    # output_dir = output_dir / ("npz" if save_npz else "npy")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    return output_dir / f"{model_name}_{dataset_name}.npz"
+    suffix = ".npz" if save_npz else ".npy"
+    path = output_dir / f"{model_name}_{dataset_name}{suffix}"
+
+    return path
 
 
 def parse_args():
@@ -151,11 +166,14 @@ def parse_args():
         default=None,
         help="Override cutoff radius in Angstroms (e.g., 20.0)",
     )
+    parser.add_argument("--save_npz", type=int, choices=[0, 1], default=0)
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
+    save_npz = bool(args.save_npz)
 
     results = predict_trajectory_batch(
         trajectory_file=args.trajectory_file,
@@ -166,17 +184,20 @@ if __name__ == "__main__":
     )
 
     output_file = build_output_path(
-        args.trajectory_file, args.checkpoint_path, args.output_dir
+        args.trajectory_file, args.checkpoint_path, args.output_dir, save_npz,
     )
 
     print(f"Saving results to: {output_file}")
 
-    np.savez_compressed(
-        output_file,
-        energy=np.array(results["energy"]),
-        forces=np.array(results["forces"], dtype=object),
-        stress=np.array(results["stress"], dtype=object),
-        embeddings=np.array(results["embeddings"].reshape(results['embeddings'].shape[0], -1), dtype=object),
-    )
+    if save_npz:
+        np.savez_compressed(
+            output_file,
+            energy=results["energy"],
+            forces=results["forces"],
+            stress=results["stress"],
+            embeddings=results["embeddings"],
+        )
+    else:
+        np.save(output_file, results["embeddings"])
 
     print("Done.")
