@@ -7,9 +7,10 @@ from collections import defaultdict
 # --------------------------------------------------
 # Paths
 # --------------------------------------------------
-data_path = Path("/home/grethel/dev/quests/sweep_results/sweep_quests_Graphite_strain.jsonl")
+train_set = "Graphite"
+data_path = Path(f"/home/grethel/dev/quests/sweep_results/sweep_quests_{train_set}_strain.jsonl")
 reference_path = Path("/home/grethel/dev/quests/gap20_quests_entropy.json")
-out_path = Path("sweep_plots/quests_entropy_strain_rainbow.png")
+out_path = Path(f"sweep_plots/quests_entropy_{train_set}_strain.png")
 
 # --------------------------------------------------
 # Load data
@@ -31,7 +32,7 @@ reference_y = [reference.get(k, None) for k in categories]
 # --------------------------------------------------
 strain_vals = [e["strain"] for e in entries]
 norm = mcolors.Normalize(vmin=min(strain_vals), vmax=max(strain_vals))
-cmap = cm.rainbow
+cmap = cm.viridis  # <-- reverse so high strain is red
 
 # --------------------------------------------------
 # Marker size mapping by k
@@ -41,6 +42,8 @@ k_min, k_max = min(k_vals), max(k_vals)
 
 def marker_size(k, smin=40, smax=160):
     """Scale marker radius with k"""
+    if k_max == k_min:
+        return (smin + smax) / 2
     return smin + (k - k_min) / (k_max - k_min) * (smax - smin)
 
 # --------------------------------------------------
@@ -50,11 +53,11 @@ def curve_label(e):
     return f"strain={e['strain']} | k={e['k']} | cutoff={e['cutoff']} | features={e['features']}"
 
 # --------------------------------------------------
-# Plot
+# Plot (ORDER CURVES BY STRAIN so legend is ordered too)
 # --------------------------------------------------
 fig, ax = plt.subplots(figsize=(10, 6))
 
-for e in entries:
+for e in sorted(entries, key=lambda x: x["strain"]):  # <-- sort by strain
     y = [e["entropies"][k] for k in categories]
     color = cmap(norm(e["strain"]))
     size = marker_size(e["k"])
@@ -63,7 +66,7 @@ for e in entries:
         categories,
         y,
         marker="o",
-        markersize=size / 10,  # matplotlib uses diameter-ish scaling
+        # markersize=size / 10,
         linewidth=1.5,
         color=color,
         label=curve_label(e),
@@ -89,7 +92,7 @@ ax.plot(
 # --------------------------------------------------
 ax.set_xlabel("Dataset")
 ax.set_ylabel("Entropy")
-ax.set_title("Dataset Entropy (QUESTS)")
+ax.set_title("QUESTS Dataset Entropy (Strain)")
 
 ax.set_xticks(range(len(categories)))
 ax.set_xticklabels(categories, rotation=30, ha="right")
@@ -97,6 +100,7 @@ ax.set_xticklabels(categories, rotation=30, ha="right")
 # --------------------------------------------------
 # Legend & colorbar
 # --------------------------------------------------
+# Legend is already ordered because we plotted in strain-sorted order.
 ax.legend(
     title="Config",
     bbox_to_anchor=(1.18, 1.0),
@@ -117,9 +121,8 @@ fig.savefig(out_path, dpi=200, bbox_inches="tight")
 plt.close(fig)
 
 # --------------------------------------------------
-# Grouped plots: same k, different strain
+# Grouped plots: same k, different strain (legend sorted)
 # --------------------------------------------------
-
 grouped_by_k = defaultdict(list)
 for e in entries:
     grouped_by_k[e["k"]].append(e)
@@ -127,7 +130,7 @@ for e in entries:
 for k_val, k_entries in sorted(grouped_by_k.items()):
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    for e in sorted(k_entries, key=lambda x: x["strain"]):
+    for e in sorted(k_entries, key=lambda x: x["strain"]):  # <-- already sorted
         y = [e["entropies"][c] for c in categories]
         color = cmap(norm(e["strain"]))
 
@@ -142,7 +145,6 @@ for k_val, k_entries in sorted(grouped_by_k.items()):
             label=f"strain={e['strain']}",
         )
 
-    # Reference QUESTS curve
     ax.plot(
         categories,
         reference_y,
@@ -154,7 +156,6 @@ for k_val, k_entries in sorted(grouped_by_k.items()):
         zorder=10,
     )
 
-    # Formatting
     ax.set_xlabel("Dataset")
     ax.set_ylabel("Entropy")
     ax.set_title(f"Dataset Entropy (QUESTS) — k={k_val}")
@@ -169,19 +170,16 @@ for k_val, k_entries in sorted(grouped_by_k.items()):
         fontsize=9,
     )
 
-    # Colorbar
     sm = cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, pad=0.02)
     cbar.set_label("Strain")
 
-    # Save
     fig.tight_layout()
     out_k = out_path.with_name(f"quests_entropy_k_{k_val}_strain_rainbow.png")
     fig.savefig(out_k, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     print(f"Saved grouped plot → {out_k}")
-
 
 print(f"Saved plot → {out_path}")

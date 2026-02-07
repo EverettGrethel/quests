@@ -1,175 +1,216 @@
 import json
+import math
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors as mcolors
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 
-# --------------------------------------------------
+# -----------------------------
 # Paths
-# --------------------------------------------------
-data_path = Path("/home/grethel/dev/quests/sweep_results/sweep_soap_Graphite_strain.jsonl")
-reference_path = Path("/home/grethel/dev/quests/gap20_quests_entropy.json")
-out_dir = Path("sweep_plots")
-out_dir.mkdir(exist_ok=True)
+# -----------------------------
+train_set = "Graphite"
+data_path = Path(f"sweep_results/sweep_soap_{train_set}_strain.jsonl")
+reference_path = Path("/home/grethel/dev/quests/gap20_quests_entropy.json")  # QUESTS reference
+out_path = Path(f"sweep_plots/soap_entropy_{train_set}_strain_grid.png")
 
-# --------------------------------------------------
-# Load data
-# --------------------------------------------------
+# -----------------------------
+# Load entries + reference
+# -----------------------------
 with open(data_path) as f:
     entries = [json.loads(line) for line in f]
 
 with open(reference_path) as f:
     reference = json.load(f)
 
-# --------------------------------------------------
-# Dataset order
-# --------------------------------------------------
+# -----------------------------
+# Category order (x-axis)
+# -----------------------------
 categories = list(entries[0]["entropies"].keys())
-reference_y = [reference.get(k, None) for k in categories]
+reference_y = [reference.get(c, None) for c in categories]
 
-# --------------------------------------------------
-# Derived complexity = n_max + l_max
-# --------------------------------------------------
+# -----------------------------
+# Global y-axis limits
+# -----------------------------
+all_entropy_vals = []
+
 for e in entries:
-    e["complexity"] = e["n_max"] + e["l_max"]
+    all_entropy_vals.extend(e["entropies"].values())
 
-complexity_vals = [e["complexity"] for e in entries]
-cmin, cmax = min(complexity_vals), max(complexity_vals)
+all_entropy_vals.extend(reference_y)
 
-def marker_size(c, smin=40, smax=100):
-    return smin + (c - cmin) / (cmax - cmin) * (smax - smin)
+y_max = max(all_entropy_vals)
 
-# --------------------------------------------------
-# Color mapping by strain
-# --------------------------------------------------
+y_limits = (0.0, y_max * 1.05)  # 5% headroom at the top
+
+
+# -----------------------------
+# Group by (n_max, l_max)
+# -----------------------------
+groups = defaultdict(list)
+for e in entries:
+    groups[(e["n_max"], e["l_max"])].append(e)
+
+group_keys = sorted(groups.keys())  # sorted (n_max, l_max)
+
+# -----------------------------
+# Marker map by r_cut
+# -----------------------------
+r_cuts = sorted({e["r_cut"] for e in entries})
+marker_cycle = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
+r_cut_to_marker = {rc: marker_cycle[i % len(marker_cycle)] for i, rc in enumerate(r_cuts)}
+
+# -----------------------------
+# Color map by strain (higher strain -> more red)
+# -----------------------------
 strain_vals = [e["strain"] for e in entries]
 norm = mcolors.Normalize(vmin=min(strain_vals), vmax=max(strain_vals))
-cmap = cm.rainbow
+cmap = cm.viridis  # reversed rainbow so max strain looks red
 
-# --------------------------------------------------
-# Label helper
-# --------------------------------------------------
-def curve_label(e):
-    return f"n_max={e['n_max']} | l_max={e['l_max']} | strain={e['strain']} | features={e['features']}"
+# -----------------------------
+# Subplot layout
+# -----------------------------
+n_panels = len(group_keys)
+ncols = min(3, n_panels)
+nrows = math.ceil(n_panels / ncols)
 
-# --------------------------------------------------
-# 1) Global plot (all curves)
-# --------------------------------------------------
-fig, ax = plt.subplots(figsize=(10, 6))
-
-for e in sorted(entries, key=lambda x: (x["complexity"], x["strain"])):
-    y = [e["entropies"][c] for c in categories]
-    color = cmap(norm(e["strain"]))
-    size = marker_size(e["complexity"])
-
-    ax.plot(
-        categories,
-        y,
-        marker="o",
-        markersize=size / 10,
-        linewidth=1.6,
-        color=color,
-        alpha=0.85,
-        label=curve_label(e),
-    )
-
-# Reference curve
-ax.plot(
-    categories,
-    reference_y,
-    color="black",
-    linewidth=3.0,
-    marker="o",
-    markersize=8,
-    label="QUESTS (reference)",
-    zorder=10,
+fig, axes = plt.subplots(
+    nrows=nrows,
+    ncols=ncols,
+    figsize=(5.5 * ncols, 4.2 * nrows),
+    sharey=True
 )
 
-ax.set_xlabel("Dataset")
-ax.set_ylabel("Entropy")
-ax.set_title("Dataset Entropy (SOAP)")
+if n_panels == 1:
+    axes = [axes]
+else:
+    axes = axes.flatten()
 
-ax.set_xticks(range(len(categories)))
-ax.set_xticklabels(categories, rotation=30, ha="right")
+# Main title
+fig.suptitle("SOAP Dataset Entropy (Strain)", fontsize=16, y=0.98)
 
-ax.legend(
-    title="Config",
-    bbox_to_anchor=(1.18, 1.0),
-    loc="upper left",
-    fontsize=9,
-)
+# -----------------------------
+# Plot each (n_max, l_max) panel
+# -----------------------------
+for ax, (nmax, lmax) in zip(axes, group_keys):
+    panel_entries = sorted(groups[(nmax, lmax)], key=lambda x: (x["strain"], x["r_cut"]))
 
-sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-sm.set_array([])
-cbar = fig.colorbar(sm, ax=ax, pad=0.02)
-cbar.set_label("Strain")
-
-fig.tight_layout()
-out_all = out_dir / "soap_entropy_strain_rainbow_all.png"
-fig.savefig(out_all, dpi=200, bbox_inches="tight")
-plt.close(fig)
-
-print(f"Saved → {out_all}")
-
-# --------------------------------------------------
-# 2) Grouped plots: same (n_max + l_max), different strain
-# --------------------------------------------------
-grouped = defaultdict(list)
-for e in entries:
-    grouped[e["complexity"]].append(e)
-
-for comp, lst in sorted(grouped.items()):
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for e in sorted(lst, key=lambda x: x["strain"]):
+    for e in panel_entries:
         y = [e["entropies"][c] for c in categories]
         color = cmap(norm(e["strain"]))
+        marker = r_cut_to_marker[e["r_cut"]]
+
+        ax.set_ylim(*y_limits)
 
         ax.plot(
             categories,
             y,
-            marker="o",
-            markersize=marker_size(comp) / 10,
-            linewidth=1.8,
             color=color,
+            marker=marker,
+            linewidth=1.6,
+            markersize=6,
             alpha=0.9,
-            label=curve_label(e)
         )
 
-    # Reference
+    # Reference QUESTS curve (black) — add back to every subplot
     ax.plot(
         categories,
         reference_y,
         color="black",
-        linewidth=3.0,
+        linewidth=2.8,
         marker="o",
-        markersize=8,
+        markersize=6,
         label="QUESTS (reference)",
         zorder=10,
     )
 
-    ax.set_xlabel("Dataset")
-    ax.set_ylabel("Entropy")
-    ax.set_title(f"Dataset Entropy (SOAP)")
-
+    ax.set_title(f"SOAP: n_max={nmax}, l_max={lmax}")
     ax.set_xticks(range(len(categories)))
     ax.set_xticklabels(categories, rotation=30, ha="right")
+    ax.grid(True, alpha=0.25)
 
-    ax.legend(
-        title="Strain",
-        bbox_to_anchor=(1.18, 1.0),
-        loc="upper left",
-        fontsize=9,
+# Hide unused axes if grid is bigger than number of panels
+for ax in axes[len(group_keys):]:
+    ax.set_visible(False)
+
+# Common labels
+fig.supylabel("Entropy")
+fig.supxlabel("Dataset")
+
+# -----------------------------
+# Layout: reserve space on the right for colorbar + legend
+# (prevents covering the rightmost subplot)
+# -----------------------------
+fig.subplots_adjust(right=0.82, top=0.90)  # right margin for cbar/legend; top for suptitle
+
+# -----------------------------
+# Strain legend (color-coded)
+# -----------------------------
+strain_levels = sorted({e["strain"] for e in entries})
+
+strain_handles = [
+    plt.Line2D(
+        [0], [0],
+        color=cmap(norm(s)),
+        marker="o",
+        linestyle="-",
+        linewidth=2.0,
+        markersize=6,
+        label=f"strain={s}",
     )
+    for s in strain_levels
+]
 
-    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, pad=0.02)
-    cbar.set_label("Strain")
+# -----------------------------
+# Add marker legend for r_cut (figure-level)
+# -----------------------------
+# -----------------------------
+# Marker legend (r_cut) + reference
+# -----------------------------
+marker_handles = [
+    plt.Line2D(
+        [0], [0],
+        color="black",
+        marker=r_cut_to_marker[rc],
+        linestyle="None",
+        markersize=7,
+        label=f"r_cut={rc}",
+    )
+    for rc in r_cuts
+]
 
-    fig.tight_layout()
-    out_comp = out_dir / f"soap_entropy_nl_{comp}_strain_rainbow.png"
-    fig.savefig(out_comp, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+ref_handle = plt.Line2D(
+    [0], [0],
+    color="black",
+    linewidth=2.8,
+    marker="o",
+    markersize=6,
+    label="QUESTS (reference)",
+)
 
-    print(f"Saved → {out_comp}")
+
+# Strain legend (top-right)
+fig.legend(
+    handles=strain_handles,
+    title="Color = Strain",
+    loc="upper left",
+    bbox_to_anchor=(0.84, 0.98),
+    fontsize=9,
+)
+
+# Marker legend (below strain legend)
+fig.legend(
+    handles=[ref_handle] + marker_handles,
+    title="Marker = r_cut",
+    loc="upper left",
+    bbox_to_anchor=(0.84, 0.58),
+    fontsize=9,
+)
+
+
+# Use tight_layout but keep our manual right margin/colorbar axes
+fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.92])
+
+fig.savefig(out_path, dpi=200, bbox_inches="tight")
+plt.close(fig)
+
+print(f"Saved → {out_path}")
