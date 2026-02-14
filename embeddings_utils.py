@@ -4,17 +4,8 @@ import torch
 def find_embeddings_file(directory, model, dataset):
     directory = Path(directory)
 
-    npy_dir = directory / "npy"
-    if npy_dir.exists():
-        for file in npy_dir.iterdir():
-            if file.is_file():
-                name = file.name
-                if name.startswith(model) and name.endswith(f"_{dataset}.npy"):
-                    return file.resolve()
-                
-    npz_dir = directory / "npz"
-    if npz_dir.exists():
-        for file in npz_dir.iterdir():
+    if directory.exists():
+        for file in directory.iterdir():
             if file.is_file():
                 name = file.name
                 if name.startswith(model) and name.endswith(f"_{dataset}.npz"):
@@ -22,7 +13,7 @@ def find_embeddings_file(directory, model, dataset):
 
     raise FileNotFoundError(
         f"Could not find embeddings (.npy or .npz) for model {model} "
-        f"and dataset {dataset} in directories {directory}/npy or {directory}/npz"
+        f"and dataset {dataset} in directories {directory}"
     )
 
 def mace_to_invariant(emb: torch.Tensor) -> torch.Tensor:
@@ -100,6 +91,9 @@ def eqv2_large_to_invariant(emb: torch.Tensor) -> torch.Tensor:
 
 
 def transform_embeddings(X, model, invariant=False):
+    if X.ndim == 2:
+        print("Embedding is already 2-dimensional.")
+        return X
     if model.startswith("uma"):
         return X.reshape(X.shape[0], -1)
     elif model.startswith("eqV2"):
