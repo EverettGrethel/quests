@@ -30,6 +30,7 @@ def parse_args():
         default="./embeddings",
         help="Directory to save output",
     )
+    parser.add_argument("--strain", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -39,6 +40,7 @@ def build_output_path(
     output_dir: str,
     save_npz: bool,
     random_weights: bool,
+    strain: float,
 ) -> Path:
     """
     Build output filename: <model>_<dataset>.(npz|npy)
@@ -47,6 +49,8 @@ def build_output_path(
     dataset_name = Path(trajectory_file).stem
 
     output_dir = Path(output_dir)
+    if strain:
+        output_dir = output_dir / f"strain_{strain}"
     if random_weights:
         output_dir = output_dir / "random"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -62,10 +66,15 @@ def run_inference(
     model_name: str,
     device: str,
     random_weights: bool,
+    strain: float,
 ):
     print(f"Reading trajectory: {trajectory_file}")
     frames = read(trajectory_file, index=":")
     print(f"Found {len(frames)} frames")
+
+    if strain:
+        for frame in frames:
+            frame.set_cell((1.0 - args.strain) * frame.cell, scale_atoms=True)
 
     print(f"Loading UMA model: {model_name}")
     predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
@@ -133,6 +142,7 @@ if __name__ == "__main__":
         model_name=args.model_name,
         device=args.device,
         random_weights=args.random_weights,
+        strain=args.strain,
     )
 
     output_file = build_output_path(
@@ -141,6 +151,7 @@ if __name__ == "__main__":
         args.output_dir,
         save_npz=True,
         random_weights=args.random_weights,
+        strain=args.strain,
     )
 
     print(f"Saving results to: {output_file}")

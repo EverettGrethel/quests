@@ -129,6 +129,7 @@ def build_output_path(
     checkpoint_path: str,
     output_dir: str,
     save_npz: bool,
+    strain: float,
 ) -> Path:
     """
     Build output filename: <model>_<dataset>.(npz|npy)
@@ -138,6 +139,8 @@ def build_output_path(
 
     output_dir = Path(output_dir)
     # output_dir = output_dir / ("npz" if save_npz else "npy")
+    if strain:
+        output_dir = output_dir / f"strain_{strain}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     suffix = ".npz" if save_npz else ".npy"
@@ -167,6 +170,7 @@ def parse_args():
         help="Override cutoff radius in Angstroms (e.g., 20.0)",
     )
     parser.add_argument("--save_npz", type=int, choices=[0, 1], default=0)
+    parser.add_argument("--strain", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -184,7 +188,7 @@ if __name__ == "__main__":
     )
 
     output_file = build_output_path(
-        args.trajectory_file, args.checkpoint_path, args.output_dir, save_npz,
+        args.trajectory_file, args.checkpoint_path, args.output_dir, save_npz, args.strain,
     )
 
     print(f"Saving results to: {output_file}")

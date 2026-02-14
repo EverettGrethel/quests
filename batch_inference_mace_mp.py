@@ -45,24 +45,28 @@ def parse_args():
         help="Torch device",
     )
     parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="./embeddings",
+        help="Directory to save output",
+    )
+    parser.add_argument(
         "--precision",
         type=str,
         default="float32",
         choices=["float32", "float64"],
         help="Floating point precision",
     )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="./embeddings",
-        help="Directory to save output",
-    )
+    parser.add_argument("--strain", type=float, default=0.0)
+
     return parser.parse_args()
 
 
-def build_output_path(trajectory_file: str, model: str, model_size: str, output_dir: str):
+def build_output_path(trajectory_file: str, model: str, model_size: str, output_dir: str, strain: float):
     dataset_name = Path(trajectory_file).stem
     output_dir = Path(output_dir)
+    if strain:
+        output_dir = output_dir / f"strain_{strain}"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir / f"mace_{model}_{model_size}_{dataset_name}.npz"
 
@@ -73,12 +77,17 @@ def run_inference(
     model_size: str,
     device: str,
     precision: str,
+    strain: float,
 ):
     dtype = torch.float32 if precision == "float32" else torch.float64
 
     print(f"Reading trajectory: {trajectory_file}")
     frames = read(trajectory_file, index=":")
     print(f"Found {len(frames)} frames")
+
+    if strain:
+        for frame in frames:
+            frame.set_cell((1.0 - args.strain) * frame.cell, scale_atoms=True)
 
     print(f"Loading MACE {model_name} size {model_size}")
     if model_name == "mp":
@@ -170,6 +179,7 @@ if __name__ == "__main__":
         model_size=args.model_size,
         device=args.device,
         precision=args.precision,
+        strain=args.strain,
     )
 
     output_file = build_output_path(
@@ -177,6 +187,7 @@ if __name__ == "__main__":
         args.model,
         args.model_size,
         args.output_dir,
+        args.strain,
     )
 
     print(f"Saving results to: {output_file}")

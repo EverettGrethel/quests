@@ -23,6 +23,7 @@ def predict_trajectory_batch(
     device: str = "cuda",
     batch_size: int = 20,
     precision: str | None = None,
+    strain: float = 0.0,
 ):
     """
     Predict energy, forces, stress for all frames in a trajectory using batching.
@@ -44,6 +45,10 @@ def predict_trajectory_batch(
 
     n_frames = len(frames)
     print(f"Found {n_frames} frames")
+
+    if strain:
+        for frame in frames:
+            frame.set_cell((1.0 - args.strain) * frame.cell, scale_atoms=True)
 
     # Load ORB model
     print("Loading ORB model...")
@@ -157,6 +162,7 @@ def build_output_path(
     model: str,
     output_dir: str,
     save_npz: bool,
+    strain: float,
 ) -> Path:
     """
     Build output filename: <model>_<dataset>.(npz|npy)
@@ -165,6 +171,8 @@ def build_output_path(
     dataset_name = Path(trajectory_file).stem
 
     output_dir = Path(output_dir)
+    if strain:
+        output_dir = output_dir / f"strain_{strain}"
     # output_dir = output_dir / ("npz" if save_npz else "npy")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -187,6 +195,7 @@ def parse_args():
         default=None,
         help='Optional ORB precision string (e.g. "float32-high" / "float32-highest" / "float64")',
     )
+    p.add_argument("--strain", type=float, default=0.0)
     return p.parse_args()
 
 
@@ -199,6 +208,7 @@ if __name__ == "__main__":
         device=args.device,
         batch_size=args.batch_size,
         precision=args.precision,
+        strain=args.strain,
     )
 
     output_file = build_output_path(
@@ -206,6 +216,7 @@ if __name__ == "__main__":
         model=args.model,
         output_dir=args.output_dir,
         save_npz=True,
+        strain=args.strain,
     )
 
     print(f"Saving results to: {output_file}")
