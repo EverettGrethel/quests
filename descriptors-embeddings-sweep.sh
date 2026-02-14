@@ -12,7 +12,8 @@ set -euo pipefail
 
 num_threads=4
 MIN_FREE_GB="8.0"
-DTYPE=32
+DTYPE=64
+# DTYPE=32
 
 # CUDA devices passed as a list
 DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
@@ -25,24 +26,40 @@ invariant=0
 # Paths
 ############################################
 
-# EMBEDDINGS_DIR="/home/grethel/dev/quests/embeddings"
-EMBEDDINGS_DIR="/home/grethel/dev/quests/embeddings/reflect_invert_invariant"
 LABELS_PATH="/home/grethel/dev/quests/gap20_quests_entropy.json"
-OUTDIR_BASE="/home/grethel/dev/quests/sweep_results/embeddings"
+
+# EMBEDDINGS_DIR="/data/grethel/embeddings/reflect_invert_invariant/npz"
+# OUTDIR_BASE="/home/grethel/dev/quests/sweep_results/embeddings"
+
+# # ----- Random (UMA) -----
+# EMBEDDINGS_DIR="/data/grethel/embeddings/reflect_invert_invariant/npz/random"
+# OUTDIR_BASE="/home/grethel/dev/quests/sweep_results/embeddings/random"
+
+# # ----- Strain 0.001 (UMA, MACE) -----
+# EMBEDDINGS_DIR="/data/grethel/embeddings/reflect_invert_invariant/npz/strain_0.001"
+# OUTDIR_BASE="/home/grethel/dev/quests/sweep_results/embeddings/strain_0.001"
+
+# # ----- Strain 0.01 (UMA, MACE) -----
+# EMBEDDINGS_DIR="/data/grethel/embeddings/reflect_invert_invariant/npz/strain_0.01"
+# OUTDIR_BASE="/home/grethel/dev/quests/sweep_results/embeddings/strain_0.01"
+
+# # ----- Strain 0.1 (UMA, MACE) -----
+# EMBEDDINGS_DIR="/data/grethel/embeddings/reflect_invert_invariant/npz/strain_0.1"
+# OUTDIR_BASE="/home/grethel/dev/quests/sweep_results/embeddings/strain_0.1"
 
 ############################################
 # Sweep parameters
 ############################################
 
 MODELS=(
+  # mace_off_small
+  # mace_off_medium
+  # mace_off_large
   mace_mp_small
   mace_mp_medium
   mace_mp_large
-  mace_off_small
-  mace_off_medium
-  mace_off_large
-  uma-s-1p1
-  uma-m-1p1
+  # uma-s-1p1
+  # uma-m-1p1
   # orb-v3-conservative-inf-omat
   # orb-v3-conservative-20-omat
   # orb-v3-conservative-inf-mpa

@@ -5,13 +5,10 @@ from contextlib import contextmanager
 import argparse
 import json
 import subprocess
-from joblib import Parallel, delayed
 import numpy as np
 import torch
 
 from ase.io import read
-from pyace import create_multispecies_basis_config
-from pyace.activelearning import compute_B_projections
 from quests.gpu.entropy import entropy, entropy_cosine
 
 from gpu_management import exclusive_gpu
@@ -66,6 +63,10 @@ def main():
     with open(args.labels_path, "r") as f:
         labels = json.load(f)
 
+    # Preliminary check for file existences
+    for test_set in test_sets:
+        _ = find_embeddings_file(data_path, model, test_set)
+
     train_set_path = find_embeddings_file(data_path, model, train_set)
     data_train = np.load(train_set_path, allow_pickle=True)
     X_train = np.stack(data_train['embeddings']).astype(np_dtype)
@@ -116,7 +117,7 @@ def main():
         else:
             test_set_path = find_embeddings_file(data_path, model, test_set)
             if test_set_path is None:
-                raise FileNotFoundError(f"Could not find embeddings for model {model} and dataset {test_set} in directory {directory}")
+                raise FileNotFoundError(f"Could not find embeddings for model {model} and dataset {test_set} in directory {test_set_path}")
             data_test = np.load(test_set_path, allow_pickle=True)
             X_test = np.stack(data_test['embeddings']).astype(np_dtype)
             X_test = transform_embeddings(X_test, model, invariant=invariant)
