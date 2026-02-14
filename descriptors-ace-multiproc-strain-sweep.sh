@@ -42,7 +42,7 @@ NRADS=(
   "12 10 8 6"
   # "10 8 6 4"
   # "8 6 6"
-  "8 4 2"
+  # "8 4 2"
   # "4"
 )
 LMAXS=(
@@ -50,12 +50,12 @@ LMAXS=(
   "0 5 5 4"
   # "0 4 4 3"
   # "0 3 3"
-  "8 6 2"
+  # "8 6 2"
   # "4"
 )
 
-# DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
-DEVICE=(cuda:2 cuda:3)
+DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
+# DEVICE=(cuda:2 cuda:3)
 DATA_PATH="/home/grethel/dev/quests/examples/gap20/{data_name}.xyz"
 
 TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes Liquid)

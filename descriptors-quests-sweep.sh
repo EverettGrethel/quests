@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+num_threads=4
+
+export NUMEXPR_NUM_THREADS=$num_threads
+export OMP_NUM_THREADS=$num_threads
+export OPENBLAS_NUM_THREADS=$num_threads
+export MKL_NUM_THREADS=$num_threads
+
 # Make sure the pueue daemon is running before using this:
 #   pueued -d
 # and optionally set concurrency with:
@@ -10,26 +17,17 @@ MIN_FREE_GB="5.0"
 
 SPECIES=(C)
 
-PERIODIC=1
 COSINE=0
 DTYPE=64
 
 STRAIN_LIST=(0.0)
 # STRAIN_LIST=(0.0)
 
-R_CUT_LIST=(5.0)
-# R_CUT_LIST=(5.0)
+# CUTOFF_LIST=(5.0 6.0 7.0)
+CUTOFF_LIST=(5.0)
 
-COMBINATIONS=(
-  # "5 5"
-  "8 8"
-  # "8 10"
-  # "10 10"
-  # "10 12"
-  # "12 12"
-  # "12 15"
-  "15 15"
-)
+# K_LIST=(32 64 128)
+K_LIST=(32)
 
 DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
 # DEVICE=(cuda:2 cuda:3)
@@ -37,28 +35,26 @@ DEVICE=(cuda:0 cuda:1 cuda:2 cuda:3)
 DATA_PATH="/home/grethel/dev/quests/examples/gap20/{data_name}.xyz"
 
 TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes Liquid)
+
 TRAIN_SETS=(Graphene Diamond Nanotubes Fullerenes Liquid)
+
 LABELS_PATH="/home/grethel/dev/quests/gap20_quests_entropy.json"
 
 
 timestamp() { date +"%Y%m%d-%H%M%S"; }
-
 for train_set in "${TRAIN_SETS[@]}"; do
   for strain in "${STRAIN_LIST[@]}"; do
-    for r_cut in "${R_CUT_LIST[@]}"; do
-      for combo in "${COMBINATIONS[@]}"; do
-        read -r l_max n_max <<< "$combo"
+    for k in "${K_LIST[@]}"; do
+      for cutoff in "${CUTOFF_LIST[@]}"; do
 
-        OUTDIR="/home/grethel/dev/quests/sweep_results/sweep_soap_${train_set}.jsonl"
+        OUTDIR="/home/grethel/dev/quests/sweep_results/sweep_quests_${train_set}.jsonl"
 
-        echo "Queuing run: r_cut=$r_cut l_max=$l_max n_max=$n_max strain=$strain"
+        echo "Queuing run: k=$k cutoff=$cutoff strain=$strain"
 
-        pueue add -- python -u descriptors-soap-sweep.py \
+        pueue add --group quests -- python -u descriptors-quests-sweep.py \
           --species "${SPECIES[@]}" \
-          --r_cut "$r_cut" \
-          --l_max $l_max \
-          --n_max $n_max \
-          --periodic $PERIODIC \
+          --k "$k" \
+          --cutoff "$cutoff" \
           --strain "$strain" \
           --cosine "$COSINE" \
           --device "${DEVICE[@]}" \

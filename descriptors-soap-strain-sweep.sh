@@ -11,22 +11,23 @@ MIN_FREE_GB="5.0"
 SPECIES=(C)
 
 PERIODIC=1
+COSINE=0
+DTYPE=64
 
-STRAIN_LIST=(0.0)
+STRAIN_LIST=(0.0 0.01 0.05 0.1)
+# STRAIN_LIST=(0.0)
 
-COSINE=1
-
-# R_CUT_LIST=(5.0 6.0 7.0)
-R_CUT_LIST=(6.0 7.0)
+R_CUT_LIST=(5.0 6.0 7.0)
+# R_CUT_LIST=(5.0)
 
 COMBINATIONS=(
-  "5 5"
+  # "5 5"
   "8 8"
-  "8 10"
-  "10 10"
-  "10 12"
-  "12 12"
-  "12 15"
+  # "8 10"
+  # "10 10"
+  # "10 12"
+  # "12 12"
+  # "12 15"
   "15 15"
 )
 
@@ -39,7 +40,7 @@ TEST_SETS=(Graphene Diamond Graphite Nanotubes Fullerenes Liquid)
 TRAIN_SET="Graphite"
 # TRAIN_SET="Fullerenes"
 LABELS_PATH="/home/grethel/dev/quests/gap20_quests_entropy.json"
-OUTDIR="/home/grethel/dev/quests/sweep_results/sweep_soap_${TRAIN_SET}_cosine.jsonl"
+OUTDIR="/home/grethel/dev/quests/sweep_results/sweep_soap_${TRAIN_SET}_strain.jsonl"
 
 timestamp() { date +"%Y%m%d-%H%M%S"; }
 
@@ -48,7 +49,7 @@ for strain in "${STRAIN_LIST[@]}"; do
     for combo in "${COMBINATIONS[@]}"; do
       read -r l_max n_max <<< "$combo"
 
-      echo "Queuing run: r_cut=$r_cut l_max=$l_max n_max=$n_max strain=$strain cosine=$COSINE"
+      echo "Queuing run: r_cut=$r_cut l_max=$l_max n_max=$n_max strain=$strain"
 
       pueue add -- python -u descriptors-soap-sweep.py \
         --species "${SPECIES[@]}" \
@@ -59,6 +60,7 @@ for strain in "${STRAIN_LIST[@]}"; do
         --strain "$strain" \
         --cosine "$COSINE" \
         --device "${DEVICE[@]}" \
+        --dtype "$DTYPE" \
         --min_free_gb "$MIN_FREE_GB" \
         --data_path "$DATA_PATH" \
         --train_set "$TRAIN_SET" \
