@@ -16,6 +16,26 @@ from ase.io import read
 from orb_models.forcefield import atomic_system, pretrained
 from orb_models.forcefield.base import batch_graphs
 
+def randomize_model(model, seed=None):
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+    for p in model.parameters():
+        p.data.copy_(torch.randn_like(p))
+
+    for m in model.modules():
+        if isinstance(m, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+            if m.running_mean is not None:
+                m.running_mean.zero_()
+            if m.running_var is not None:
+                m.running_var.fill_(1.0)
+
+def model_param_norm(model):
+    total = 0.0
+    for p in model.parameters():
+        total += p.data.norm().item()
+    return total
 
 def predict_trajectory_batch(
     trajectory_file: str,
@@ -24,6 +44,8 @@ def predict_trajectory_batch(
     batch_size: int = 20,
     precision: str | None = None,
     strain: float = 0.0,
+    random_weights: bool = False,
+    random_seed: int | None = None,
 ):
     """
     Predict energy, forces, stress for all frames in a trajectory using batching.
@@ -57,6 +79,14 @@ def predict_trajectory_batch(
         **({"precision": precision} if precision is not None else {}),
     )
     print(f"Model device: {device}")
+
+    if random_weights:
+        before = model_param_norm(orbff.model)
+        print(f"Randomizing ORB weights (seed={random_seed})")
+        randomize_model(orbff.model, seed=random_seed)
+        after = model_param_norm(orbff.model)
+        print(f"Param norm before: {before:.3e}")
+        print(f"Param norm after : {after:.3e}")
 
     model_dtype = next(orbff.model.parameters()).dtype
     np_dtype = np.float64 if model_dtype == torch.float64 else np.float32
@@ -196,6 +226,8 @@ def parse_args():
         help='Optional ORB precision string (e.g. "float32-high" / "float32-highest" / "float64")',
     )
     p.add_argument("--strain", type=float, default=0.0)
+    p.add_argument("--random_weights", type=int, choices=[0,1], default=0)
+    p.add_argument("--random_seed", type=int, default=None)
     return p.parse_args()
 
 
@@ -209,6 +241,8 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         precision=args.precision,
         strain=args.strain,
+        random_weights=args.random_weights,
+        random_seed=args.random_seed,
     )
 
     output_file = build_output_path(
